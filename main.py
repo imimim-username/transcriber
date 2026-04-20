@@ -1,4 +1,4 @@
-import pyannote.audio
+
 from pydub import AudioSegment
 
 audiofile_path = "/home/imimim/gits/transcriber/audio/Imim-Gorby.m4a"
