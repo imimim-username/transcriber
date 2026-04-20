@@ -16,7 +16,7 @@ def transcribe(
     audio_path: str | Path,
     diarized_segments: list[dict[str, Any]],
     *,
-    model_id: str = "openai/whisper-large-v3",
+    model_id: str = "openai/whisper-large-v3-turbo",
 ) -> list[dict[str, Any]]:
     """Transcribe ``audio_path`` for each diarized segment.
 
@@ -31,21 +31,19 @@ def transcribe(
 
     audio = AudioSegment.from_file(str(path))
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        torch_dtype = torch.float16
-        pipe_device = 0
-    else:
-        device = torch.device("cpu")
-        torch_dtype = torch.float32
-        pipe_device = -1
+    # Match https://huggingface.co/openai/whisper-large-v3-turbo usage
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
 
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        use_safetensors=True,
-    )
+    model_kwargs: dict[str, Any] = {
+        "torch_dtype": torch_dtype,
+        "low_cpu_mem_usage": True,
+        "use_safetensors": True,
+    }
+    if device.startswith("cuda"):
+        model_kwargs["attn_implementation"] = "sdpa"
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
     model.to(device)
 
     processor = AutoProcessor.from_pretrained(model_id)
@@ -56,7 +54,7 @@ def transcribe(
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
         torch_dtype=torch_dtype,
-        device=pipe_device,
+        device=device,
     )
 
     transcribed: list[dict[str, Any]] = []
