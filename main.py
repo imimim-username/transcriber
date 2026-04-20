@@ -2,6 +2,8 @@ from pydub import AudioSegment
 
 from diarize import diarize
 
+from transcribe import transcribe
+
 audiofile_path = "/home/imimim/gits/transcriber/audio/Imim-Gorby.m4a"
 
 wav_path = "/home/imimim/gits/transcriber/audio/Imim-Gorby.wav"
@@ -13,4 +15,6 @@ audio.export(wav_path, format="wav")
 
 diarized_segments = diarize(wav_path)
 
-print(diarized_segments)
+transcribed_segments = transcribe(wav_path, diarized_segments)
+
+print(transcribed_segments)
