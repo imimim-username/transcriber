@@ -1,4 +1,5 @@
 .venv/
+.env
 audio/
 
 __pycache__/

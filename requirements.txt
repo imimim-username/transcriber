@@ -1,4 +1,5 @@
 pandas
 pydub
 pyannote-audio
+python-dotenv
 torch
