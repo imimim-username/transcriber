@@ -5,3 +5,26 @@ audio/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+*.egg
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+.idea/

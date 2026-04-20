@@ -1,5 +1,7 @@
+accelerate
 pandas
 pydub
 pyannote-audio
 python-dotenv
 torch
+transformers
