@@ -1,41 +1,74 @@
-def diarize(audio_path):
+"""Speaker diarization using pyannote.audio."""
 
-    from pyannote.audio import Pipeline
-    from pyannote.audio.pipelines.utils.hook import ProgressHook
-    import torch
-    import pandas as pd
+from __future__ import annotations
 
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token="")
+import os
+from pathlib import Path
+from typing import Any
 
-    pipeline.to(torch.device("cuda"))
+import torch
+from pyannote.audio import Pipeline
+from pyannote.audio.pipelines.utils.hook import ProgressHook
+from pyannote.core import Annotation
+
+
+def _resolve_hf_token() -> str | bool | None:
+    """Token for Hugging Face Hub (gated models). None uses the hub's default lookup."""
+    for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
+def _inference_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
+def _annotation_from_pipeline_output(result: Any) -> Annotation:
+    """Handle both DiarizeOutput (default) and legacy Annotation returns."""
+    annotation = getattr(result, "speaker_diarization", None)
+    if annotation is not None:
+        return annotation
+    if isinstance(result, Annotation):
+        return result
+    raise TypeError(f"Unexpected pipeline output type: {type(result)!r}")
+
+
+def diarize(
+    audio_path: str | Path,
+    *,
+    model_id: str = "pyannote/speaker-diarization-3.1",
+) -> list[dict[str, Any]]:
+    """Run speaker diarization on ``audio_path``.
+
+    Returns a list of segments, each
+    ``{"start_time": float, "end_time": float, "speaker": str}`` (seconds).
+
+    The diarization model is gated on Hugging Face: accept the conditions on the
+    model card, then authenticate with ``HF_TOKEN`` or ``HUGGING_FACE_HUB_TOKEN``,
+    or ``huggingface-cli login``.
+    """
+    path = Path(audio_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Audio file not found: {path}")
+
+    pipeline = Pipeline.from_pretrained(model_id, token=_resolve_hf_token())
+    pipeline.to(_inference_device())
 
     with ProgressHook() as hook:
-        # run the pipeline on an audio file
-        diarization = pipeline(audio_path, hook=hook)
+        raw = pipeline(str(path), hook=hook)
 
-    diarized_path = "/home/imimim/gits/transcriber/audio/diarized.rttm"
-    
-    with open(diarized_path, "w") as rttm:
-        diarization.write_rttm(rttm)
-    
-    #convert diarized audio to datafram and then dict
-
-    df = pd.read_csv(diarized_path, sep=' ', header=None)
-
-    diarization_data = []
-
-    for index, row in df.iterrows():
-        start_time = float(row[3])
-        end_time = float(row[3]) + float(row[4])
-        speaker = row[7]
-    segment = {
-        'start_time' : start_time,
-        'end_time' : end_time,
-        'speaker' : speaker
-    }
-    
-    diarization_data.append(segment)
-    
-    return diarization_data
+    annotation = _annotation_from_pipeline_output(raw)
+    segments = [
+        {
+            "start_time": float(segment.start),
+            "end_time": float(segment.end),
+            "speaker": str(label),
+        }
+        for segment, _, label in annotation.itertracks(yield_label=True)
+    ]
+    segments.sort(key=lambda s: s["start_time"])
+    return segments

@@ -1,2 +1,4 @@
+pandas
 pydub
 pyannote-audio
+torch
