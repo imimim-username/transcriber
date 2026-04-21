@@ -62,7 +62,7 @@ def transcribe(
     local_files_only = _offline()
 
     model_kwargs: dict[str, Any] = {
-        "torch_dtype": torch_dtype,
+        "dtype": torch_dtype,
         "low_cpu_mem_usage": True,
         "use_safetensors": True,
         "local_files_only": local_files_only,
