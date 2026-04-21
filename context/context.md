@@ -68,6 +68,7 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — both `diarize.py` a
 - `transcribe.py`: passes `local_files_only=True` to both `AutoModelForSpeechSeq2Seq.from_pretrained()` and `AutoProcessor.from_pretrained()` when offline
 - `diarize.py`: pyannote doesn't support `local_files_only` directly — `HF_HUB_OFFLINE=1` env var handles it at the HF Hub level; token is set to `None` in offline mode
 - `TRANSFORMERS_OFFLINE=1` is also checked as an alternative
+- **Important:** `HF_HUB_OFFLINE=1` will crash if the model has never been downloaded. Must run once with `HF_HUB_OFFLINE=0` (and network access) to populate the cache, then offline mode works forever after.
 
 ### HF token handling
 - `diarize.py` checks `HF_TOKEN` then `HUGGING_FACE_HUB_TOKEN` env vars
@@ -118,6 +119,12 @@ transformers
 ```
 
 ffmpeg must also be installed system-wide for audio conversion.
+
+---
+
+## Pending / ideas discussed
+
+- **Progress bar for transcription** — user asked about adding one (2026-04-21). Not yet implemented. Current output is per-segment `[N/Total]` lines printed live. A bar (e.g. `tqdm`) could replace or supplement this.
 
 ---
 
