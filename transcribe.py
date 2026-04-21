@@ -9,6 +9,7 @@ from typing import Any
 
 import torch
 from pydub import AudioSegment
+from tqdm import tqdm
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 
@@ -87,33 +88,37 @@ def transcribe(
     transcribed: list[dict[str, Any]] = []
     total = len(diarized_segments)
 
-    for i, segment in enumerate(diarized_segments, start=1):
-        start_ms = int(float(segment["start_time"]) * 1000)
-        end_ms = int(float(segment["end_time"]) * 1000)
-        if end_ms <= start_ms:
-            continue
+    with tqdm(total=total, unit="seg", desc="Transcribing", ncols=80) as bar:
+        for segment in diarized_segments:
+            start_ms = int(float(segment["start_time"]) * 1000)
+            end_ms = int(float(segment["end_time"]) * 1000)
+            if end_ms <= start_ms:
+                bar.update(1)
+                continue
 
-        start_fmt = format_time(segment["start_time"])
-        end_fmt = format_time(segment["end_time"])
-        speaker = segment["speaker"]
-        print(f"  [{i}/{total}] {start_fmt} → {end_fmt}  {speaker}", flush=True)
+            start_fmt = format_time(segment["start_time"])
+            end_fmt = format_time(segment["end_time"])
+            speaker = segment["speaker"]
+            tqdm.write(f"  {start_fmt} → {end_fmt}  {speaker}")
 
-        cropped = audio[start_ms:end_ms]
+            cropped = audio[start_ms:end_ms]
 
-        fd, temp_path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            cropped.export(temp_path, format="wav")
-            result = pipe(temp_path)
-            text = result.get("text", "").strip()
-            transcribed.append({"segmentInfo": segment, "text": text})
-            if text:
-                print(f"    {text}", flush=True)
-        except (ValueError, OSError, RuntimeError):
-            # Unusable snippet (e.g. near-silent clip) or I/O / model runtime error
-            transcribed.append({"segmentInfo": segment, "text": ""})
-        finally:
-            if os.path.isfile(temp_path):
-                os.unlink(temp_path)
+            fd, temp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            try:
+                cropped.export(temp_path, format="wav")
+                result = pipe(temp_path)
+                text = result.get("text", "").strip()
+                transcribed.append({"segmentInfo": segment, "text": text})
+                if text:
+                    tqdm.write(f"    {text}")
+            except (ValueError, OSError, RuntimeError):
+                # Unusable snippet (e.g. near-silent clip) or I/O / model runtime error
+                transcribed.append({"segmentInfo": segment, "text": ""})
+            finally:
+                if os.path.isfile(temp_path):
+                    os.unlink(temp_path)
+
+            bar.update(1)
 
     return transcribed
