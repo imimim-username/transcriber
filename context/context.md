@@ -57,7 +57,11 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 Priority order: **CUDA → MPS (Apple Silicon) → CPU** — both `diarize.py` and `transcribe.py` follow this.
 
 - `diarize.py`: checks `torch.cuda.is_available()` then `torch.backends.mps.is_available()`
-- `transcribe.py`: same check; uses `float16` on CUDA, `float32` on MPS and CPU (float16 has incomplete op support on MPS); SDPA attention enabled on CUDA only
+- `transcribe.py`: same check; dtype is `float16` on CUDA, `float32` on MPS and CPU (float16 has incomplete op support on MPS); SDPA attention enabled on CUDA only
+
+### `from_pretrained()` parameter note
+- The `dtype=` parameter is used (not `torch_dtype=` — that name is deprecated in newer transformers versions)
+- `torch_dtype=` is still passed to the `pipeline()` call (this is a different parameter on a different object and has not been renamed)
 
 ### Offline mode
 - Controlled by `HF_HUB_OFFLINE=1` in `.env`
@@ -85,7 +89,7 @@ Printed live as each segment is processed:
 ### Output files
 - Written to the same directory as the input audio file, named after its stem
 - JSON: array of `{"segmentInfo": {start_time, end_time, speaker}, "text": str}`
-- Markdown: title, UTC generation timestamp, one line per segment with bold speaker label; empty-text segments are skipped
+- Markdown: title, UTC generation timestamp, one line per non-empty segment with bold speaker label
 
 ---
 
