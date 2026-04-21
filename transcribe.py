@@ -50,8 +50,15 @@ def transcribe(
 
     audio = AudioSegment.from_file(str(path))
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+    if torch.cuda.is_available():
+        device = "cuda:0"
+        torch_dtype = torch.float16
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        torch_dtype = torch.float32  # float16 has incomplete op support on MPS
+    else:
+        device = "cpu"
+        torch_dtype = torch.float32
     local_files_only = _offline()
 
     model_kwargs: dict[str, Any] = {

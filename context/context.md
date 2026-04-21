@@ -60,8 +60,10 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 - `TRANSFORMERS_OFFLINE=1` is also checked as an alternative env var
 
 ### GPU/CPU detection
-- Both `diarize.py` and `transcribe.py` call `torch.cuda.is_available()` independently
-- Whisper uses `float16` on CUDA, `float32` on CPU; SDPA attention enabled on CUDA
+- Priority order: **CUDA → MPS (Apple Silicon) → CPU**
+- Both `diarize.py` and `transcribe.py` check `torch.cuda.is_available()` then `torch.backends.mps.is_available()`
+- Whisper dtype: `float16` on CUDA, `float32` on MPS and CPU (float16 has incomplete op support on MPS)
+- SDPA attention enabled on CUDA only
 - No manual configuration needed — auto-detected at runtime
 
 ### HF token handling
