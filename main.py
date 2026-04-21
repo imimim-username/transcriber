@@ -24,6 +24,12 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Must be set before PyTorch (or any OpenMP-linked library) is imported.
+# On macOS with Homebrew/conda, duplicate OpenMP libraries cause a crash;
+# this env var tells OpenMP to tolerate the conflict.
+if sys.platform == "darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
