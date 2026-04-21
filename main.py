@@ -6,6 +6,10 @@ Usage:
 Supported formats: anything pydub/ffmpeg can read (mp3, m4a, wav, flac, ogg, …).
 The file is converted to WAV internally before processing; the original is untouched.
 
+Output files are written next to the input file:
+    audiofile.json  — full results as JSON
+    audiofile.md    — human-readable transcript in Markdown
+
 Set HF_HUB_OFFLINE=1 in .env (or the environment) to prevent all network calls
 after the models have been downloaded once.
 """
@@ -13,16 +17,18 @@ after the models have been downloaded once.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
 from diarize import diarize
-from transcribe import transcribe
+from transcribe import format_time, transcribe
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -44,10 +50,41 @@ def _to_wav(audio_path: Path) -> tuple[Path, bool]:
     return Path(tmp), True
 
 
-def _format_time(seconds: float) -> str:
-    """Format *seconds* as ``MM:SS.mmm``."""
-    m, s = divmod(seconds, 60)
-    return f"{int(m):02d}:{s:06.3f}"
+def _write_json(results: list[dict], out_path: Path) -> None:
+    """Write *results* as a JSON array to *out_path*."""
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+
+def _write_markdown(
+    results: list[dict],
+    source_name: str,
+    out_path: Path,
+) -> None:
+    """Write a human-readable Markdown transcript to *out_path*."""
+    now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        f"# Transcript: {source_name}",
+        "",
+        f"*Generated: {now}*",
+        "",
+        "---",
+        "",
+    ]
+
+    for item in results:
+        seg = item["segmentInfo"]
+        text = item["text"]
+        if not text:
+            continue
+        start = format_time(seg["start_time"])
+        end = format_time(seg["end_time"])
+        speaker = seg["speaker"]
+        lines.append(f"[{start} → {end}] **{speaker}:** {text}")
+        lines.append("")
+
+    with out_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -64,6 +101,11 @@ def main(argv: list[str] | None = None) -> None:
     if not audio_path.is_file():
         print(f"error: file not found: {audio_path}", file=sys.stderr)
         sys.exit(1)
+
+    stem = audio_path.stem
+    out_dir = audio_path.parent
+    json_path = out_dir / f"{stem}.json"
+    md_path = out_dir / f"{stem}.md"
 
     print(f"Processing: {audio_path.name}")
 
@@ -82,14 +124,11 @@ def main(argv: list[str] | None = None) -> None:
         if wav_created and wav_path.is_file():
             wav_path.unlink()
 
-    for item in results:
-        seg = item["segmentInfo"]
-        start = _format_time(seg["start_time"])
-        end = _format_time(seg["end_time"])
-        speaker = seg["speaker"]
-        text = item["text"]
-        if text:
-            print(f"[{start} → {end}] {speaker}: {text}")
+    print(f"\nDone. Writing output files…")
+    _write_json(results, json_path)
+    _write_markdown(results, audio_path.name, md_path)
+    print(f"  {json_path}")
+    print(f"  {md_path}")
 
 
 if __name__ == "__main__":

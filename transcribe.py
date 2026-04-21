@@ -12,6 +12,12 @@ from pydub import AudioSegment
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 
+def format_time(seconds: float) -> str:
+    """Format *seconds* as ``MM:SS.mmm``."""
+    m, s = divmod(seconds, 60)
+    return f"{int(m):02d}:{s:06.3f}"
+
+
 def _offline() -> bool:
     """Return True when the HuggingFace offline env vars are set."""
     return (
@@ -72,12 +78,18 @@ def transcribe(
     )
 
     transcribed: list[dict[str, Any]] = []
+    total = len(diarized_segments)
 
-    for segment in diarized_segments:
+    for i, segment in enumerate(diarized_segments, start=1):
         start_ms = int(float(segment["start_time"]) * 1000)
         end_ms = int(float(segment["end_time"]) * 1000)
         if end_ms <= start_ms:
             continue
+
+        start_fmt = format_time(segment["start_time"])
+        end_fmt = format_time(segment["end_time"])
+        speaker = segment["speaker"]
+        print(f"  [{i}/{total}] {start_fmt} → {end_fmt}  {speaker}", flush=True)
 
         cropped = audio[start_ms:end_ms]
 
@@ -86,20 +98,13 @@ def transcribe(
         try:
             cropped.export(temp_path, format="wav")
             result = pipe(temp_path)
-            transcribed.append(
-                {
-                    "segmentInfo": segment,
-                    "text": result.get("text", "").strip(),
-                }
-            )
+            text = result.get("text", "").strip()
+            transcribed.append({"segmentInfo": segment, "text": text})
+            if text:
+                print(f"    {text}", flush=True)
         except (ValueError, OSError, RuntimeError):
             # Unusable snippet (e.g. near-silent clip) or I/O / model runtime error
-            transcribed.append(
-                {
-                    "segmentInfo": segment,
-                    "text": "",
-                }
-            )
+            transcribed.append({"segmentInfo": segment, "text": ""})
         finally:
             if os.path.isfile(temp_path):
                 os.unlink(temp_path)
