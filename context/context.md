@@ -33,10 +33,10 @@ transcriber/
 1. `main.py` takes an audio file path as a CLI argument
 2. If the file isn't already WAV, it's converted to a temp WAV via pydub/ffmpeg (cleaned up after)
 3. `diarize()` runs pyannote speaker diarization → list of `{start_time, end_time, speaker}` segments
-4. `transcribe()` loads Whisper, iterates each segment, slices the audio, runs inference, prints progress live
+4. `transcribe()` loads Whisper, iterates each segment, slices the audio, runs inference, and prints progress live as each segment completes
 5. `main.py` writes two output files next to the source audio:
    - `{stem}.json` — full results array
-   - `{stem}.md` — formatted Markdown transcript
+   - `{stem}.md` — formatted Markdown transcript with bold speaker labels and UTC generation timestamp
 
 ---
 
@@ -53,18 +53,17 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 
 ## Key implementation details
 
+### Device selection
+Priority order: **CUDA → MPS (Apple Silicon) → CPU** — both `diarize.py` and `transcribe.py` follow this.
+
+- `diarize.py`: checks `torch.cuda.is_available()` then `torch.backends.mps.is_available()`
+- `transcribe.py`: same check; uses `float16` on CUDA, `float32` on MPS and CPU (float16 has incomplete op support on MPS); SDPA attention enabled on CUDA only
+
 ### Offline mode
 - Controlled by `HF_HUB_OFFLINE=1` in `.env`
 - `transcribe.py`: passes `local_files_only=True` to both `AutoModelForSpeechSeq2Seq.from_pretrained()` and `AutoProcessor.from_pretrained()` when offline
 - `diarize.py`: pyannote doesn't support `local_files_only` directly — `HF_HUB_OFFLINE=1` env var handles it at the HF Hub level; token is set to `None` in offline mode
-- `TRANSFORMERS_OFFLINE=1` is also checked as an alternative env var
-
-### GPU/CPU detection
-- Priority order: **CUDA → MPS (Apple Silicon) → CPU**
-- Both `diarize.py` and `transcribe.py` check `torch.cuda.is_available()` then `torch.backends.mps.is_available()`
-- Whisper dtype: `float16` on CUDA, `float32` on MPS and CPU (float16 has incomplete op support on MPS)
-- SDPA attention enabled on CUDA only
-- No manual configuration needed — auto-detected at runtime
+- `TRANSFORMERS_OFFLINE=1` is also checked as an alternative
 
 ### HF token handling
 - `diarize.py` checks `HF_TOKEN` then `HUGGING_FACE_HUB_TOKEN` env vars
@@ -75,7 +74,8 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 - `load_dotenv()` is called at module level in both `main.py` and `diarize.py`
 - Points to `.env` in the project root (relative to `__file__`)
 
-### Progress output (transcribe.py)
+### Progress output (`transcribe.py`)
+Printed live as each segment is processed:
 ```
   [1/38] 00:00.480 → 00:03.820  SPEAKER_00
     Hey, how's it going?
@@ -83,9 +83,9 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 - `format_time()` is a public function in `transcribe.py`, imported by `main.py`
 
 ### Output files
-- Written to the same directory as the input audio file
-- Markdown format: title, UTC timestamp, one line per segment with bold speaker label
-- Segments with empty text are skipped in the Markdown output but included in JSON
+- Written to the same directory as the input audio file, named after its stem
+- JSON: array of `{"segmentInfo": {start_time, end_time, speaker}, "text": str}`
+- Markdown: title, UTC generation timestamp, one line per segment with bold speaker label; empty-text segments are skipped
 
 ---
 
