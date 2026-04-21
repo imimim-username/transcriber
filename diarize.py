@@ -12,10 +12,18 @@ from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.utils.hook import ProgressHook
 from pyannote.core import Annotation
 
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
-def _resolve_hf_token() -> str | bool | None:
-    """Token for Hugging Face Hub (gated models). None uses the hub's default lookup."""
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+
+def _resolve_hf_token() -> str | None:
+    """Return the HuggingFace token from the environment, or None.
+
+    In offline mode (HF_HUB_OFFLINE=1) no token is needed — the model is
+    loaded entirely from the local cache.
+    """
+    if os.environ.get("HF_HUB_OFFLINE", "0") == "1":
+        return None
+
     for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         value = os.environ.get(key)
         if value:
@@ -47,22 +55,27 @@ def diarize(
     """Run speaker diarization on ``audio_path``.
 
     Returns a list of segments, each
-    ``{"start_time": float, "end_time": float, "speaker": str}`` (seconds).
+    ``{"start_time": float, "end_time": float, "speaker": str}`` (seconds),
+    sorted by start time.
 
-    The diarization model is gated on Hugging Face: accept the conditions on the
-    model card, then set ``HF_TOKEN`` in a project ``.env`` file (loaded
-    automatically), or export ``HF_TOKEN`` / ``HUGGING_FACE_HUB_TOKEN``, or use
-    ``huggingface-cli login``.
+    **First run:** the model is downloaded from HuggingFace automatically.
+    Set ``HF_TOKEN`` in ``.env`` if the model requires authentication.
+
+    **Subsequent runs:** set ``HF_HUB_OFFLINE=1`` in ``.env`` to prevent any
+    network access and load directly from the local cache.
     """
     path = Path(audio_path)
     if not path.is_file():
         raise FileNotFoundError(f"Audio file not found: {path}")
 
-    pipeline = Pipeline.from_pretrained(model_id, token=_resolve_hf_token())
-    pipeline.to(_inference_device())
+    diarization_pipeline = Pipeline.from_pretrained(
+        model_id,
+        token=_resolve_hf_token(),
+    )
+    diarization_pipeline.to(_inference_device())
 
     with ProgressHook() as hook:
-        raw = pipeline(str(path), hook=hook)
+        raw = diarization_pipeline(str(path), hook=hook)
 
     annotation = _annotation_from_pipeline_output(raw)
     segments = [

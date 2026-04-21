@@ -12,6 +12,14 @@ from pydub import AudioSegment
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 
+def _offline() -> bool:
+    """Return True when the HuggingFace offline env vars are set."""
+    return (
+        os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+        or os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
+    )
+
+
 def transcribe(
     audio_path: str | Path,
     diarized_segments: list[dict[str, Any]],
@@ -24,6 +32,11 @@ def transcribe(
     item ``{"start_time": float, "end_time": float, "speaker": str}`` (seconds).
 
     Returns a list of ``{"segmentInfo": segment_dict, "text": str}``.
+
+    Set ``HF_HUB_OFFLINE=1`` or ``TRANSFORMERS_OFFLINE=1`` in the environment
+    (or in ``.env``) to prevent any network access — models must be cached first.
+    ``model_id`` may also be an absolute path to a local directory containing the
+    model files.
     """
     path = Path(audio_path)
     if not path.is_file():
@@ -31,14 +44,15 @@ def transcribe(
 
     audio = AudioSegment.from_file(str(path))
 
-    # Match https://huggingface.co/openai/whisper-large-v3-turbo usage
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if device.startswith("cuda") else torch.float32
+    local_files_only = _offline()
 
     model_kwargs: dict[str, Any] = {
         "torch_dtype": torch_dtype,
         "low_cpu_mem_usage": True,
         "use_safetensors": True,
+        "local_files_only": local_files_only,
     }
     if device.startswith("cuda"):
         model_kwargs["attn_implementation"] = "sdpa"
@@ -46,7 +60,7 @@ def transcribe(
     model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
     model.to(device)
 
-    processor = AutoProcessor.from_pretrained(model_id)
+    processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_files_only)
 
     pipe = pipeline(
         "automatic-speech-recognition",
