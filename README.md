@@ -7,6 +7,10 @@ No cloud APIs. No subscriptions. Everything runs on your machine.
 
 ## What it does
 
+Two modes:
+
+### Single audio file
+
 1. **Diarization** — identifies *who* is speaking and *when*, using [pyannote.audio](https://github.com/pyannote/pyannote-audio).
 2. **Transcription** — converts each speaker's audio segment to text using [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) via HuggingFace Transformers.
 
@@ -28,12 +32,12 @@ Done. Writing output files…
   /path/to/interview.md
 ```
 
-Two output files are written next to the source audio when complete:
+Two output files are written next to the source audio:
 
 - **`audiofile.json`** — full results as a JSON array
 - **`audiofile.md`** — formatted Markdown transcript
 
-The Markdown file looks like:
+The Markdown transcript looks like:
 
 ```markdown
 # Transcript: interview.mp3
@@ -48,6 +52,10 @@ The Markdown file looks like:
 
 [00:08.000 → 00:12.340] **SPEAKER_00:** Nice. Did you send it over yet?
 ```
+
+### Multi-track zip
+
+Pass a zip of per-speaker audio files instead of a single audio file. Each speaker has their own track; diarization is skipped entirely. All tracks are transcribed with Whisper and the segments are merged chronologically. See the **Usage** section below for full details.
 
 ---
 
@@ -187,6 +195,29 @@ add to `.env`:
 ```
 HF_HOME=/mnt/data/huggingface
 ```
+
+---
+
+## Running the tests
+
+The test suite requires only `pytest` — **no GPU, no model downloads, no
+`ffmpeg`**. All ML dependencies (`torch`, `transformers`, `pyannote`, `pydub`,
+etc.) are stubbed out by `tests/conftest.py` at import time, so the suite runs
+in any plain Python environment.
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+83 tests across four files:
+
+| Test file | What it covers |
+|---|---|
+| `tests/test_transcribe.py` | `format_time`, `_offline`, `transcribe()` |
+| `tests/test_diarize.py` | Token resolution, annotation parsing, `diarize()` |
+| `tests/test_transcribe_zip.py` | `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `process_zip()` |
+| `tests/test_main.py` | `_to_wav`, output writers, `main()` dispatch and cleanup |
 
 ---
 

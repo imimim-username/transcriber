@@ -2,12 +2,19 @@
 
 ## What this is
 
-A local, offline-capable CLI tool that diarizes and transcribes an audio file.
+A local, offline-capable CLI tool that diarizes and transcribes audio.
 No cloud APIs. Runs entirely on-device using HuggingFace models.
 
-**Usage:**
+Two modes:
+
+**Single audio file** — diarize → transcribe per-segment:
 ```bash
 python main.py path/to/audio.mp3
+```
+
+**Multi-track zip** — one audio file per speaker, no diarization:
+```bash
+python main.py path/to/recording.zip
 ```
 
 ---
@@ -23,8 +30,15 @@ transcriber/
 ├── requirements.txt
 ├── .env.example
 ├── README.md
-└── context/
-    └── context.md       # This file
+├── context/
+│   └── context.md       # This file
+└── tests/
+    ├── __init__.py
+    ├── conftest.py          # ML dependency stubs (torch, transformers, pyannote, …)
+    ├── test_diarize.py
+    ├── test_main.py
+    ├── test_transcribe.py
+    └── test_transcribe_zip.py
 ```
 
 ---
@@ -140,12 +154,31 @@ accelerate
 pandas
 pydub
 pyannote-audio
+pytest
 python-dotenv
 torch
+tqdm
 transformers
 ```
 
 ffmpeg must also be installed system-wide for audio conversion.
+
+## Running the tests
+
+```bash
+pytest tests/ -v
+```
+
+No GPU, no models, no ffmpeg needed. `tests/conftest.py` stubs all heavy ML
+imports (`torch`, `transformers`, `pyannote`, `pydub`, `tqdm`, `dotenv`) into
+`sys.modules` before the production code is imported, so the suite runs in any
+plain Python environment with only `pytest` installed.
+
+83 tests total:
+- `test_transcribe.py` — `format_time`, `_offline`, `transcribe()`
+- `test_diarize.py` — token resolution, annotation parsing, `diarize()`
+- `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `process_zip()`
+- `test_main.py` — `_to_wav`, output writers, `main()` dispatch and cleanup
 
 ---
 
@@ -161,7 +194,8 @@ ffmpeg must also be installed system-wide for audio conversion.
 - Added `transcribe_zip.py` — full multi-track zip pipeline (no diarization, speaker from filename, chronological merge)
 - Updated `main.py` to detect `.zip` extension and dispatch to `process_zip()`
 - Updated `README.md` with zip mode usage, zip layout, `info.txt` format, and output filename docs
-- Updated `How it works` section in `main.py` docstring to document both modes
+- Added full test suite: 83 tests across 4 files; `conftest.py` stubs all ML deps so tests run with only pytest installed
+- Added pytest to `requirements.txt`; updated all documentation
 
 ---
 
