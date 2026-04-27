@@ -233,9 +233,9 @@ def process_zip(
         date_str = info["date_str"]
         start_time_raw = info["start_time_raw"]
 
-        # --- Discover audio files ---
+        # --- Discover audio files (recursive) ---
         audio_entries: list[tuple[int, str, Path]] = []
-        for f in tmp_dir.iterdir():
+        for f in tmp_dir.rglob("*"):
             if f.is_file() and f.suffix.lower() in _AUDIO_EXTENSIONS:
                 m = re.match(r"^(\d+)-", f.name)
                 num = int(m.group(1)) if m else 0

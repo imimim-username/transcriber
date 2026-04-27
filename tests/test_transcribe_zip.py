@@ -528,6 +528,23 @@ class TestProcessZip:
 
         assert json_path.name == f"meeting-{today}.json"
 
+    def test_audio_files_in_subdirectory_discovered(self, tmp_path: Path):
+        """Audio files nested inside a subdirectory within the zip are found."""
+        from transcribe_zip import process_zip
+
+        wav = _make_wav_bytes()
+        zp = tmp_path / "recording.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            zf.writestr("info.txt", "Start time:  2026-04-27T11:51:12.426Z\n")
+            zf.writestr("tracks/1-alice.wav", wav)  # nested one level deep
+
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
+            json_path, _ = process_zip(zp)
+
+        data = json.loads(json_path.read_text())
+        assert len(data) == 1
+        assert data[0]["segmentInfo"]["speaker"] == "alice"
+
 
 # ---------------------------------------------------------------------------
 # _safe_extractall — path traversal protection

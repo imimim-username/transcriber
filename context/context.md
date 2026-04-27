@@ -62,7 +62,7 @@ transcriber/
 1. `main.py` detects a `.zip` extension and delegates to `transcribe_zip.process_zip()`
 2. Zip is extracted to a `tempfile.mkdtemp()` directory (cleaned up in `finally`)
 3. `info.txt` is parsed for `Start time: YYYY-MM-DDThh:mm:ss.sssZ` → date used for output filenames
-4. Audio files are discovered by scanning for `[number]-[speaker].[ext]` filenames; sorted by number
+4. Audio files are discovered by recursively scanning (`rglob`) for `[number]-[speaker].[ext]` filenames anywhere in the zip; sorted by number
 5. Whisper is loaded once (`openai/whisper-large-v3-turbo`)
 6. Each track is transcribed with `pipe(str(audio_path), return_timestamps=True)` — produces chunk-level timestamps; no diarization needed (speaker identity from filename)
 7. All segments from all tracks are merged and sorted chronologically by `start_time`
