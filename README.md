@@ -12,7 +12,9 @@ Two modes:
 ### Single audio file
 
 1. **Diarization** — identifies *who* is speaking and *when*, using [pyannote.audio](https://github.com/pyannote/pyannote-audio).
-2. **Transcription** — converts each speaker's audio segment to text using [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3-turbo) via HuggingFace Transformers.
+2. **Transcription** — converts each speaker's audio segment to text using [OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3-turbo). The backend is chosen automatically based on the available hardware:
+   - **CUDA / MPS** — HuggingFace Transformers pipeline
+   - **CPU** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with CTranslate2 int8 quantisation (4–8× faster than the standard pipeline on CPU, with built-in VAD to skip silent regions)
 
 While running, progress is printed live as each segment is transcribed:
 
@@ -68,7 +70,7 @@ Pass a zip of per-speaker audio files instead of a single audio file. Each speak
 - GPU strongly recommended for reasonable speed:
   - **NVIDIA:** CUDA-capable GPU
   - **Apple Silicon (M1/M2/M3):** Metal (MPS) is used automatically
-  - **CPU-only:** works, but significantly slower — especially for Whisper
+  - **CPU-only:** supported — on CPU, `faster-whisper` with int8 quantisation is used automatically, which is substantially faster than the standard HuggingFace pipeline on CPU
 
 ---
 
@@ -218,7 +220,7 @@ flowchart TD
     Diarize --> DiarizeOut[/"segments\nstart · end · speaker"/]
 
     DiarizeOut --> Transcribe
-    Transcribe["transcribe.py\nLoad Whisper once\nslice audio per segment\nrun inference"]
+    Transcribe["transcribe.py · model_utils.py\nCUDA/MPS → HF pipeline\nCPU → faster-whisper int8 + VAD\nslice audio per segment · run inference"]
     Transcribe --> AudioOut
 
     AudioOut[["stem.json\nstem.md\n(next to input file)"]]
@@ -235,7 +237,7 @@ flowchart TD
     DiscoverTracks["Discover audio tracks\nrglob recursive scan\n1-speaker.ext  sorted by number"]
     DiscoverTracks --> LoadModel
 
-    LoadModel["Load Whisper model\nopenai/whisper-large-v3-turbo"]
+    LoadModel["model_utils.load_whisper()\nCUDA/MPS → HF pipeline\nCPU → faster-whisper int8 + VAD"]
     LoadModel --> ForEach
 
     ForEach(["for each track"])
@@ -328,9 +330,12 @@ with `HF_HUB_OFFLINE=0` (the default) to download it first.
 Whisper large-v3-turbo needs ~6 GB VRAM. Switch to a smaller model by editing
 the `model_id` default in `transcribe.py` — e.g. `openai/whisper-base` (~150 MB).
 
-**Very slow on CPU**
-Expected. Whisper large-v3-turbo on CPU can take several minutes per minute of
-audio. For CPU-only machines, switch to `openai/whisper-base` in `transcribe.py`.
+**Still slow on CPU**
+On CPU, `faster-whisper` with int8 quantisation and VAD is used automatically,
+which is substantially faster than the standard HuggingFace pipeline. If it is
+still too slow, switch to a smaller model by changing the `model_id` default in
+`transcribe.py` and `transcribe_zip.py` — e.g. `openai/whisper-small` — which
+maps to the corresponding faster-whisper size automatically.
 
 **MPS errors on Apple Silicon**
 Make sure you have PyTorch 2.0+ installed. If you hit unsupported op errors,

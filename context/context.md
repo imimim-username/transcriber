@@ -242,6 +242,7 @@ Patch targets after `model_utils` refactor:
 - Added `FasterWhisperAdapter` class to `model_utils.py` — wraps `faster_whisper.WhisperModel` with the HuggingFace pipeline call signature; supports both `return_timestamps=True` (chunks) and `return_timestamps=False` (flat text); VAD filtering always enabled
 - `load_whisper()` now branches on device: CUDA/MPS → HuggingFace pipeline (unchanged); CPU → `FasterWhisperAdapter` with `compute_type="int8"` (4–8× faster, built-in VAD)
 - `_HF_TO_FW` dict maps `openai/whisper-*` HuggingFace model IDs to faster-whisper size strings; unknown IDs pass through as-is
+- On CPU, `load_whisper()` prints a notice before loading: `"No GPU detected — using faster-whisper (CPU, int8) with model '...' ..."` so the user knows which backend and model are being used
 - Added `faster-whisper>=1.0.0` to `requirements.txt`
 - `tests/conftest.py`: added `faster_whisper` stub (`WhisperModel` as MagicMock)
 - `tests/test_model_utils.py`: refactored into `TestLoadWhisperHF` (CUDA/MPS, forces `cuda=True`) and `TestLoadWhisperCPU` (CPU, faster-whisper path); added `TestFasterWhisperAdapter` (5 tests); 121 tests total, all passing
