@@ -31,6 +31,7 @@ def _ensure_not_already_imported(*names: str) -> None:
 # Order matters — remove any real imports that snuck in before we stub.
 _ensure_not_already_imported(
     "torch", "torch.backends", "torch.backends.mps",
+    "faster_whisper",
     "pydub", "tqdm", "dotenv",
     "transformers",
     "pyannote", "pyannote.audio", "pyannote.audio.pipelines",
@@ -84,6 +85,10 @@ tqdm_mod.tqdm = _FakeTqdm
 # ── dotenv ─────────────────────────────────────────────────────────────────
 dotenv_mod = _stub("dotenv")
 dotenv_mod.load_dotenv = MagicMock()
+
+# ── faster_whisper ─────────────────────────────────────────────────────────
+faster_whisper_mod = _stub("faster_whisper")
+faster_whisper_mod.WhisperModel = MagicMock()
 
 # ── transformers ───────────────────────────────────────────────────────────
 transformers_mod = _stub("transformers")

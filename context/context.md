@@ -77,9 +77,10 @@ transcriber/
 | Model | Purpose | Size |
 |---|---|---|
 | `pyannote/speaker-diarization-community-1` | Speaker diarization | ~300 MB |
-| `openai/whisper-large-v3-turbo` | Speech-to-text | ~1.6 GB |
+| `openai/whisper-large-v3-turbo` | Speech-to-text (CUDA / MPS) | ~1.6 GB |
+| `Systran/faster-whisper-large-v3-turbo` | Speech-to-text (CPU, int8) | ~800 MB |
 
-Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
+All cached by HuggingFace in `~/.cache/huggingface/` after first download. The correct Whisper variant is selected automatically.
 
 ---
 
@@ -88,26 +89,28 @@ Both are cached by HuggingFace in `~/.cache/huggingface/` after first download.
 ### Shared model utilities (`model_utils.py`)
 `model_utils.py` centralises the duplicated logic that previously existed in both `transcribe.py` and `transcribe_zip.py`:
 - `offline() -> bool` — checks `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` env vars
-- `load_whisper(model_id: str) -> pipeline` — full device detection, dtype selection, SDPA flag, and HF model loading
+- `load_whisper(model_id: str) -> Any` — device detection, then either HF pipeline (CUDA/MPS) or `FasterWhisperAdapter` (CPU)
+- `FasterWhisperAdapter` — wraps `faster_whisper.WhisperModel` with the HuggingFace pipeline call signature so callers need no conditional logic
 
 Both `transcribe.py` and `transcribe_zip.py` import from `model_utils` and contain no duplicate model-loading code.
 
 `transcribe()` accepts an optional `pipe=` parameter — if a pre-loaded pipeline is passed in, `load_whisper()` is skipped entirely. This allows the caller to load the model once and reuse it across multiple calls.
 
-The pipeline is always created with `generate_kwargs={"language": "en", "task": "transcribe"}` to suppress Whisper's multilingual language-detection and force English transcription.
-
 ### Device selection
 Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` and `diarize.py` both follow this.
 
-- `model_utils.py` (Whisper): checks `torch.cuda.is_available()` then `torch.backends.mps.is_available()`; dtype is `float16` on CUDA, `float32` on MPS and CPU; SDPA attention enabled on CUDA only
-- `diarize.py`: same check
+- `model_utils.py` (Whisper):
+  - CUDA/MPS → HuggingFace `transformers` pipeline; dtype `float16` on CUDA, `float32` on MPS; SDPA attention on CUDA only
+  - CPU → `FasterWhisperAdapter` wrapping `faster_whisper.WhisperModel`; `compute_type="int8"`; VAD filter enabled; typically 4–8× faster than HF pipeline on CPU
+  - Model-ID mapping: `openai/whisper-*` IDs are translated to faster-whisper size strings (e.g. `"large-v3-turbo"`); unknown IDs pass through as-is
+- `diarize.py`: same CUDA → MPS → CPU check; always uses pyannote (no faster-whisper equivalent)
 
 ### `from_pretrained()` and `pipeline()` parameter note
 - `dtype=` is used everywhere (not `torch_dtype=`) — `torch_dtype` is deprecated in newer transformers versions for both `from_pretrained()` and `pipeline()`
 
 ### Offline mode
 - Controlled by `HF_HUB_OFFLINE=1` in `.env`
-- `model_utils.py`: passes `local_files_only=True` to both `AutoModelForSpeechSeq2Seq.from_pretrained()` and `AutoProcessor.from_pretrained()` when offline
+- `model_utils.py`: on CUDA/MPS, passes `local_files_only=True` to both `AutoModelForSpeechSeq2Seq.from_pretrained()` and `AutoProcessor.from_pretrained()` when offline; on CPU, passes `local_files_only=True` to `WhisperModel()`
 - `diarize.py`: pyannote doesn't support `local_files_only` directly — `HF_HUB_OFFLINE=1` env var handles it at the HF Hub level; token is set to `None` in offline mode
 - `TRANSFORMERS_OFFLINE=1` is also checked as an alternative
 - **Important:** `HF_HUB_OFFLINE=1` will crash if the model has never been downloaded. Must run once with `HF_HUB_OFFLINE=0` (and network access) to populate the cache, then offline mode works forever after.
@@ -211,8 +214,8 @@ imports (`torch`, `transformers`, `pyannote`, `pydub`, `tqdm`, `dotenv`) into
 `sys.modules` before the production code is imported, so the suite runs in any
 plain Python environment with only `pytest` installed.
 
-107 tests total:
-- `test_model_utils.py` — `offline()`, `load_whisper()` device selection, SDPA flag, offline/online `local_files_only`, English language forced, return value
+121 tests total:
+- `test_model_utils.py` — `offline()`, `FasterWhisperAdapter` (chunks/text output, VAD, language), `load_whisper()` HF path (CUDA/MPS device, SDPA, `local_files_only`, generation_config), CPU path (returns `FasterWhisperAdapter`, model-ID mapping, int8 compute type, `local_files_only`)
 - `test_transcribe.py` — `format_time` (including hours and two-hour cases), `transcribe()`, `pipe=` injection bypasses `load_whisper`
 - `test_diarize.py` — token resolution, annotation parsing, `diarize()`
 - `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall` (safe extraction + path-traversal rejection + nested paths), recursive subdirectory discovery, progress output (spying on `tqdm.write`), `process_zip()`
@@ -234,6 +237,15 @@ Patch targets after `model_utils` refactor:
 ---
 
 ## Recent changes
+
+### 2026-04-27 (faster-whisper CPU path)
+- Added `FasterWhisperAdapter` class to `model_utils.py` — wraps `faster_whisper.WhisperModel` with the HuggingFace pipeline call signature; supports both `return_timestamps=True` (chunks) and `return_timestamps=False` (flat text); VAD filtering always enabled
+- `load_whisper()` now branches on device: CUDA/MPS → HuggingFace pipeline (unchanged); CPU → `FasterWhisperAdapter` with `compute_type="int8"` (4–8× faster, built-in VAD)
+- `_HF_TO_FW` dict maps `openai/whisper-*` HuggingFace model IDs to faster-whisper size strings; unknown IDs pass through as-is
+- Added `faster-whisper>=1.0.0` to `requirements.txt`
+- `tests/conftest.py`: added `faster_whisper` stub (`WhisperModel` as MagicMock)
+- `tests/test_model_utils.py`: refactored into `TestLoadWhisperHF` (CUDA/MPS, forces `cuda=True`) and `TestLoadWhisperCPU` (CPU, faster-whisper path); added `TestFasterWhisperAdapter` (5 tests); 121 tests total, all passing
+- Added spinner (`_spinning_inference`) during Whisper inference in `transcribe_zip.py` — background thread writes rotating `|/-\` to stderr every 100 ms; cleared on completion
 
 ### 2026-04-27 (post-feedback fixes)
 - Fixed `pipeline()` call in `model_utils.py`: changed `torch_dtype=torch_dtype` → `dtype=torch_dtype`; `torch_dtype=` is deprecated in newer transformers for both `from_pretrained()` and `pipeline()`

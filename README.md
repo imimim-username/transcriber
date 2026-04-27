@@ -270,11 +270,11 @@ pip install pytest
 pytest tests/ -v
 ```
 
-107 tests across five files:
+121 tests across five files:
 
 | Test file | What it covers |
 |---|---|
-| `tests/test_model_utils.py` | `offline()`, `load_whisper()` device selection and model calls |
+| `tests/test_model_utils.py` | `offline()`, `FasterWhisperAdapter`, `load_whisper()` HF and CPU paths |
 | `tests/test_transcribe.py` | `format_time` (including hours), `transcribe()`, `pipe=` injection |
 | `tests/test_diarize.py` | Token resolution, annotation parsing, `diarize()` |
 | `tests/test_transcribe_zip.py` | `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall`, `process_zip()` |
@@ -293,8 +293,8 @@ pytest tests/ -v
 | `model_utils.py` | Shared Whisper model loading — `offline()` and `load_whisper()` used by both transcription modules |
 
 All modules auto-detect the best available device: **CUDA → MPS (Apple Silicon) → CPU**.
-Whisper uses `float16` on CUDA and `float32` on MPS/CPU (float16 has incomplete op support on MPS).
-SDPA attention is enabled on CUDA for better performance.
+On CUDA and MPS, a HuggingFace `transformers` pipeline is used (`float16` on CUDA, `float32` on MPS; SDPA attention on CUDA).
+On CPU, `faster-whisper` with CTranslate2 int8 quantisation is used instead — typically 4–8× faster than the HuggingFace pipeline on CPU, with built-in VAD filtering to skip silent regions.
 
 ---
 
@@ -303,9 +303,11 @@ SDPA attention is enabled on CUDA for better performance.
 | Model | Size | Purpose |
 |---|---|---|
 | `pyannote/speaker-diarization-community-1` | ~300 MB | Speaker diarization |
-| `openai/whisper-large-v3-turbo` | ~1.6 GB | Speech-to-text |
+| `openai/whisper-large-v3-turbo` | ~1.6 GB | Speech-to-text (CUDA / MPS) |
+| `Systran/faster-whisper-large-v3-turbo` | ~800 MB | Speech-to-text (CPU, int8) |
 
-Both are cached by HuggingFace in `~/.cache/huggingface/` after the first download.
+All models are cached by HuggingFace in `~/.cache/huggingface/` after the first download.
+The correct Whisper variant is selected automatically based on the detected device.
 
 ---
 

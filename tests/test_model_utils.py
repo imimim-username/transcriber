@@ -1,4 +1,4 @@
-"""Tests for model_utils.py — offline() and load_whisper()."""
+"""Tests for model_utils.py — offline(), FasterWhisperAdapter, and load_whisper()."""
 
 from __future__ import annotations
 
@@ -37,54 +37,88 @@ class TestOffline:
 
 
 # ---------------------------------------------------------------------------
-# load_whisper() — device selection and model loading calls
+# FasterWhisperAdapter — unit tests for the CPU-path adapter
 # ---------------------------------------------------------------------------
 
 import model_utils
+from model_utils import FasterWhisperAdapter
 
 
-class TestLoadWhisper:
-    """Verify device selection and that the right HF calls are made."""
+def _make_fw_segment(text: str, start: float, end: float) -> MagicMock:
+    seg = MagicMock()
+    seg.text = text
+    seg.start = start
+    seg.end = end
+    return seg
 
-    def _patch_all(self, *, cuda: bool = False, mps: bool = False):
-        """Return a context-manager that patches torch availability + HF APIs."""
+
+class TestFasterWhisperAdapter:
+    def test_returns_chunks_when_return_timestamps_true(self):
         model_mock = MagicMock()
-        processor_mock = MagicMock()
-        pipe_mock = MagicMock()
-
-        return (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=cuda),
-            patch.object(model_utils.torch.backends.mps, "is_available", return_value=mps),
-            patch.object(model_utils, "AutoModelForSpeechSeq2Seq"),
-            patch.object(model_utils, "AutoProcessor"),
-            patch.object(model_utils, "pipeline", return_value=pipe_mock),
-            model_mock,
-            processor_mock,
-            pipe_mock,
+        model_mock.transcribe.return_value = (
+            [_make_fw_segment(" hello", 0.0, 1.0)],
+            MagicMock(),
         )
+        adapter = FasterWhisperAdapter(model_mock)
+        result = adapter("audio.wav", return_timestamps=True)
+        assert result == {"chunks": [{"text": " hello", "timestamp": (0.0, 1.0)}]}
 
-    def test_cpu_device_selected(self):
+    def test_returns_text_when_return_timestamps_false(self):
         model_mock = MagicMock()
-        processor_mock = MagicMock()
-        pipe_mock = MagicMock()
+        model_mock.transcribe.return_value = (
+            [
+                _make_fw_segment(" hello", 0.0, 1.0),
+                _make_fw_segment(" world", 1.0, 2.0),
+            ],
+            MagicMock(),
+        )
+        adapter = FasterWhisperAdapter(model_mock)
+        result = adapter("audio.wav", return_timestamps=False)
+        assert result == {"text": "hello world"}
 
-        with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+    def test_default_is_no_timestamps(self):
+        model_mock = MagicMock()
+        model_mock.transcribe.return_value = (
+            [_make_fw_segment(" hi", 0.0, 0.5)],
+            MagicMock(),
+        )
+        adapter = FasterWhisperAdapter(model_mock)
+        result = adapter("audio.wav")
+        assert "text" in result
+        assert "chunks" not in result
+
+    def test_vad_filter_always_enabled(self):
+        model_mock = MagicMock()
+        model_mock.transcribe.return_value = ([], MagicMock())
+        adapter = FasterWhisperAdapter(model_mock)
+        adapter("audio.wav")
+        kwargs = model_mock.transcribe.call_args.kwargs
+        assert kwargs.get("vad_filter") is True
+
+    def test_english_language_forced(self):
+        model_mock = MagicMock()
+        model_mock.transcribe.return_value = ([], MagicMock())
+        adapter = FasterWhisperAdapter(model_mock)
+        adapter("audio.wav")
+        kwargs = model_mock.transcribe.call_args.kwargs
+        assert kwargs.get("language") == "en"
+        assert kwargs.get("task") == "transcribe"
+
+
+# ---------------------------------------------------------------------------
+# load_whisper() — HuggingFace path (CUDA / MPS)
+# ---------------------------------------------------------------------------
+
+class TestLoadWhisperHF:
+    """Tests for the HuggingFace pipeline path.  Force cuda=True to ensure the
+    HF branch is taken regardless of the host machine's hardware."""
+
+    def _cuda_context(self, *, monkeypatch=None):
+        """Return a tuple of patches that put us on the CUDA path."""
+        return (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
-            patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
-            patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
-            patch.object(model_utils, "pipeline", return_value=pipe_mock),
-        ):
-            mock_model_cls.from_pretrained.return_value = model_mock
-            mock_proc_cls.from_pretrained.return_value = processor_mock
-
-            result = model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
-            # pipeline called with cpu device
-            call_kwargs = model_utils.pipeline.call_args
-            assert call_kwargs.kwargs.get("device") == "cpu" or (
-                len(call_kwargs.args) == 0 and call_kwargs.kwargs["device"] == "cpu"
-            )
+        )
 
     def test_cuda_device_selected(self):
         model_mock = MagicMock()
@@ -100,12 +134,25 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
+            assert model_utils.pipeline.call_args.kwargs["device"] == "cuda:0"
 
-            # pipeline called with cuda:0
-            call_kwargs = model_utils.pipeline.call_args.kwargs
-            assert call_kwargs["device"] == "cuda:0"
+    def test_mps_device_selected(self):
+        model_mock = MagicMock()
+        processor_mock = MagicMock()
+        pipe_mock = MagicMock()
+
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=True),
+            patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
+            patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
+            patch.object(model_utils, "pipeline", return_value=pipe_mock),
+        ):
+            mock_model_cls.from_pretrained.return_value = model_mock
+            mock_proc_cls.from_pretrained.return_value = processor_mock
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+            assert model_utils.pipeline.call_args.kwargs["device"] == "mps"
 
     def test_from_pretrained_called_with_model_id(self):
         model_mock = MagicMock()
@@ -113,7 +160,7 @@ class TestLoadWhisper:
         pipe_mock = MagicMock()
 
         with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
@@ -121,12 +168,8 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("my-model-id")
-
-            mock_model_cls.from_pretrained.assert_called_once()
-            call_args = mock_model_cls.from_pretrained.call_args
-            assert call_args.args[0] == "my-model-id"
+            assert mock_model_cls.from_pretrained.call_args.args[0] == "my-model-id"
 
     def test_local_files_only_set_when_offline(self, monkeypatch):
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -135,7 +178,7 @@ class TestLoadWhisper:
         pipe_mock = MagicMock()
 
         with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
@@ -143,11 +186,9 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
-            call_kwargs = mock_model_cls.from_pretrained.call_args.kwargs
-            assert call_kwargs.get("local_files_only") is True
+            kwargs = mock_model_cls.from_pretrained.call_args.kwargs
+            assert kwargs.get("local_files_only") is True
 
     def test_local_files_only_false_when_online(self, monkeypatch):
         monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
@@ -157,7 +198,7 @@ class TestLoadWhisper:
         pipe_mock = MagicMock()
 
         with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
@@ -165,11 +206,9 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
-            call_kwargs = mock_model_cls.from_pretrained.call_args.kwargs
-            assert call_kwargs.get("local_files_only") is False
+            kwargs = mock_model_cls.from_pretrained.call_args.kwargs
+            assert kwargs.get("local_files_only") is False
 
     def test_cuda_uses_sdpa_attention(self):
         model_mock = MagicMock()
@@ -185,31 +224,27 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
+            kwargs = mock_model_cls.from_pretrained.call_args.kwargs
+            assert kwargs.get("attn_implementation") == "sdpa"
 
-            call_kwargs = mock_model_cls.from_pretrained.call_args.kwargs
-            assert call_kwargs.get("attn_implementation") == "sdpa"
-
-    def test_cpu_does_not_use_sdpa(self):
+    def test_mps_does_not_use_sdpa(self):
         model_mock = MagicMock()
         processor_mock = MagicMock()
         pipe_mock = MagicMock()
 
         with (
             patch.object(model_utils.torch.cuda, "is_available", return_value=False),
-            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=True),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
             patch.object(model_utils, "pipeline", return_value=pipe_mock),
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
-            call_kwargs = mock_model_cls.from_pretrained.call_args.kwargs
-            assert "attn_implementation" not in call_kwargs
+            kwargs = mock_model_cls.from_pretrained.call_args.kwargs
+            assert "attn_implementation" not in kwargs
 
     def test_returns_pipeline(self):
         model_mock = MagicMock()
@@ -217,7 +252,7 @@ class TestLoadWhisper:
         pipe_mock = MagicMock()
 
         with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
@@ -225,25 +260,17 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             result = model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
             assert result is pipe_mock
 
-    def test_english_language_forced(self):
-        """language='en' and task='transcribe' must be set on model.generation_config.
-
-        We set them there (not via pipeline generate_kwargs=) to avoid the
-        duplicate-logits-processor warning that transformers emits when both the
-        pipeline and Whisper's internal .generate() try to create the same
-        SuppressTokens processors.
-        """
+    def test_english_language_forced_via_generation_config(self):
+        """language/task must be set on model.generation_config, not in pipeline kwargs."""
         model_mock = MagicMock()
         processor_mock = MagicMock()
         pipe_mock = MagicMock()
 
         with (
-            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.cuda, "is_available", return_value=True),
             patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
             patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
             patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
@@ -251,11 +278,91 @@ class TestLoadWhisper:
         ):
             mock_model_cls.from_pretrained.return_value = model_mock
             mock_proc_cls.from_pretrained.return_value = processor_mock
-
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
-
-            # language/task go on generation_config, NOT in pipeline generate_kwargs
             assert model_mock.generation_config.language == "en"
             assert model_mock.generation_config.task == "transcribe"
-            pipeline_kwargs = model_utils.pipeline.call_args.kwargs
-            assert "generate_kwargs" not in pipeline_kwargs
+            assert "generate_kwargs" not in model_utils.pipeline.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# load_whisper() — faster-whisper CPU path
+# ---------------------------------------------------------------------------
+
+import faster_whisper as _fw_mod  # the stub registered by conftest.py
+
+
+class TestLoadWhisperCPU:
+    """Tests for the faster-whisper path (no CUDA, no MPS)."""
+
+    def _cpu_patches(self):
+        return (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+        )
+
+    def test_cpu_returns_faster_whisper_adapter(self):
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel"),
+        ):
+            result = model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        assert isinstance(result, FasterWhisperAdapter)
+
+    def test_cpu_does_not_call_hf_pipeline(self):
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel"),
+            patch.object(model_utils, "pipeline") as mock_pipeline,
+        ):
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        mock_pipeline.assert_not_called()
+
+    def test_cpu_maps_known_hf_model_id(self):
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel") as mock_wm,
+        ):
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        assert mock_wm.call_args.args[0] == "large-v3-turbo"
+
+    def test_cpu_unknown_model_id_passes_through(self):
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel") as mock_wm,
+        ):
+            model_utils.load_whisper("Systran/faster-whisper-large-v3-turbo")
+        assert mock_wm.call_args.args[0] == "Systran/faster-whisper-large-v3-turbo"
+
+    def test_cpu_uses_int8_compute_type(self):
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel") as mock_wm,
+        ):
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        assert mock_wm.call_args.kwargs.get("compute_type") == "int8"
+
+    def test_cpu_local_files_only_when_offline(self, monkeypatch):
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel") as mock_wm,
+        ):
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        assert mock_wm.call_args.kwargs.get("local_files_only") is True
+
+    def test_cpu_local_files_only_false_when_online(self, monkeypatch):
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch("faster_whisper.WhisperModel") as mock_wm,
+        ):
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+        assert mock_wm.call_args.kwargs.get("local_files_only") is False
