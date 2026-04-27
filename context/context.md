@@ -122,7 +122,7 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 
 ### HF token handling
 - `diarize.py` checks `HF_TOKEN` then `HUGGING_FACE_HUB_TOKEN` env vars
-- Token is skipped entirely when `HF_HUB_OFFLINE=1`
+- Token is skipped entirely when `HF_HUB_OFFLINE=1` **or** `TRANSFORMERS_OFFLINE=1` (consistent with `model_utils.offline()`)
 - Whisper model requires no token
 
 ### `.env` loading

@@ -20,6 +20,13 @@ from diarize import _resolve_hf_token
 class TestResolveHfToken:
     def test_returns_none_in_offline_mode(self, monkeypatch):
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+        monkeypatch.setenv("HF_TOKEN", "hf_secret")
+        assert _resolve_hf_token() is None
+
+    def test_returns_none_when_transformers_offline(self, monkeypatch):
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
         monkeypatch.setenv("HF_TOKEN", "hf_secret")
         assert _resolve_hf_token() is None
 

@@ -18,10 +18,13 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 def _resolve_hf_token() -> str | None:
     """Return the HuggingFace token from the environment, or None.
 
-    In offline mode (HF_HUB_OFFLINE=1) no token is needed — the model is
-    loaded entirely from the local cache.
+    In offline mode (HF_HUB_OFFLINE=1 or TRANSFORMERS_OFFLINE=1) no token
+    is needed — the model is loaded entirely from the local cache.
     """
-    if os.environ.get("HF_HUB_OFFLINE", "0") == "1":
+    if (
+        os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+        or os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
+    ):
         return None
 
     for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
