@@ -142,9 +142,9 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 
 ### Progress output
 
-**`transcribe.py`** (single audio file mode) — printed live per diarized segment:
+**`transcribe.py`** (single audio file mode) — printed live per diarized segment via `tqdm.write()`; a tqdm bar tracks overall count separately:
 ```
-  [1/38] 00:00.480 → 00:03.820  SPEAKER_00
+  00:00.480 → 00:03.820  SPEAKER_00
     Hey, how's it going?
 ```
 

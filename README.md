@@ -21,9 +21,9 @@ Processing: interview.mp3
 Running diarization…
 Transcribing 38 segment(s)…
 
-  [1/38] 00:00.480 → 00:03.820  SPEAKER_00
+  00:00.480 → 00:03.820  SPEAKER_00
     Hey, how's it going?
-  [2/38] 00:04.100 → 00:07.650  SPEAKER_01
+  00:04.100 → 00:07.650  SPEAKER_01
     Pretty good, just finished the report.
   …
 
@@ -31,6 +31,8 @@ Done. Writing output files…
   /path/to/interview.json
   /path/to/interview.md
 ```
+
+A tqdm progress bar also tracks overall segment count in the terminal.
 
 Two output files are written next to the source audio:
 
