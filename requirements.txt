@@ -2,6 +2,7 @@ accelerate
 pandas
 pydub
 pyannote-audio
+pytest
 python-dotenv
 torch
 tqdm
