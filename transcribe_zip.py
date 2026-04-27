@@ -24,10 +24,13 @@ Both output files are written next to the zip file.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import shutil
+import sys
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,6 +110,37 @@ def _sort_key(entry: tuple[int, str, Path]) -> int:
     return entry[0]
 
 
+def _spinning_inference(pipe: Any, audio_path: Path) -> dict[str, Any]:
+    """Call ``pipe()`` while showing a spinner on stderr.
+
+    Whisper inference on a long track can take several minutes with no
+    visible output.  The spinner reassures the user that the process has
+    not stalled.  A background thread updates the spinner character every
+    100 ms while the (blocking) ``pipe()`` call runs in the foreground.
+    The spinner line is cleared before returning so subsequent output is
+    not affected.
+    """
+    frames = itertools.cycle("|/-\\")
+    stop = threading.Event()
+
+    def _spin() -> None:
+        while not stop.is_set():
+            sys.stderr.write(f"\r  Running Whisper inference… {next(frames)} ")
+            sys.stderr.flush()
+            stop.wait(0.1)
+        # Erase the spinner line so it doesn't linger in the terminal.
+        sys.stderr.write("\r" + " " * 50 + "\r")
+        sys.stderr.flush()
+
+    thread = threading.Thread(target=_spin, daemon=True)
+    thread.start()
+    try:
+        return pipe(str(audio_path), return_timestamps=True)
+    finally:
+        stop.set()
+        thread.join()
+
+
 # ---------------------------------------------------------------------------
 # Per-track transcription
 # ---------------------------------------------------------------------------
@@ -125,8 +159,7 @@ def _transcribe_track(
 
     Empty chunks are skipped.
     """
-    tqdm.write("  Running Whisper inference…")
-    result = pipe(str(audio_path), return_timestamps=True)
+    result = _spinning_inference(pipe, audio_path)
     chunks: list[dict[str, Any]] = result.get("chunks") or []
     total_chunks = len(chunks)
 

@@ -259,37 +259,41 @@ class TestProgressOutput:
             wf.writeframes(b"\x00\x00" * 16000)
 
     def test_running_inference_message_emitted(self, tmp_path: Path):
+        """_spinning_inference is called once per track."""
         import transcribe_zip
         audio = tmp_path / "track.wav"
         self._make_wav(audio)
         pipe = MagicMock(return_value={"chunks": []})
 
-        written: list[str] = []
-        with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+        with patch.object(
+            transcribe_zip, "_spinning_inference", return_value={"chunks": []}
+        ) as mock_spin:
             _transcribe_track(audio, "alice", pipe)
 
-        assert any("Running Whisper inference" in m for m in written)
+        mock_spin.assert_called_once_with(pipe, audio)
 
     def test_inference_message_printed_before_pipe_called(self, tmp_path: Path):
-        """'Running Whisper inference…' must appear before the pipe is invoked."""
+        """_spinning_inference is called before any segment lines are written."""
         import transcribe_zip
         audio = tmp_path / "track.wav"
         self._make_wav(audio)
 
         call_order: list[str] = []
 
+        def fake_spin(pipe: Any, path: Path) -> dict:
+            call_order.append("spin")
+            return {"chunks": [{"text": "hello", "timestamp": (0.0, 1.0)}]}
+
         def fake_write(msg: str) -> None:
-            if "Running Whisper" in msg:
+            if "→" in msg or "hello" in msg:
                 call_order.append("write")
 
-        def fake_pipe(path: str, **kwargs: Any) -> dict:
-            call_order.append("pipe")
-            return {"chunks": []}
+        with patch.object(transcribe_zip, "_spinning_inference", side_effect=fake_spin):
+            with patch.object(transcribe_zip.tqdm, "write", side_effect=fake_write):
+                _transcribe_track(audio, "alice", MagicMock())
 
-        with patch.object(transcribe_zip.tqdm, "write", side_effect=fake_write):
-            _transcribe_track(audio, "alice", fake_pipe)
-
-        assert call_order == ["write", "pipe"]
+        assert call_order[0] == "spin"
+        assert "write" in call_order
 
     def test_chunk_counter_format(self, tmp_path: Path):
         """Segment lines include [i/total] chunk counter."""
@@ -359,6 +363,30 @@ class TestProgressOutput:
         headers = [m for m in written if "──" in m]
         assert any("alice" in h for h in headers)
         assert any("1-alice.wav" in h for h in headers)
+
+
+# ---------------------------------------------------------------------------
+# _spinning_inference — spinner helper
+# ---------------------------------------------------------------------------
+
+import transcribe_zip as _tzip
+
+
+class TestSpinningInference:
+    def test_calls_pipe_with_return_timestamps(self, tmp_path: Path):
+        audio = tmp_path / "track.wav"
+        audio.write_bytes(b"fake audio")
+        mock_pipe = MagicMock(return_value={"chunks": []})
+        _tzip._spinning_inference(mock_pipe, audio)
+        mock_pipe.assert_called_once_with(str(audio), return_timestamps=True)
+
+    def test_returns_pipe_result(self, tmp_path: Path):
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"fake")
+        expected = {"chunks": [{"timestamp": (0.0, 1.0), "text": "hi"}]}
+        mock_pipe = MagicMock(return_value=expected)
+        result = _tzip._spinning_inference(mock_pipe, audio)
+        assert result is expected
 
 
 # ---------------------------------------------------------------------------
