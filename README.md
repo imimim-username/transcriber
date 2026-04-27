@@ -108,6 +108,8 @@ The Whisper model downloads automatically with no account needed.
 
 ## Usage
 
+### Single audio file
+
 ```bash
 python main.py path/to/audio.mp3
 ```
@@ -116,6 +118,46 @@ Any format ffmpeg supports works: `.mp3`, `.m4a`, `.wav`, `.flac`, `.ogg`, etc.
 
 On first run, the models are downloaded from HuggingFace (~2 GB total) and
 cached locally. Subsequent runs load from cache and are much faster.
+
+### Multi-track zip (per-speaker recording)
+
+```bash
+python main.py path/to/recording.zip
+```
+
+Use this when you have a separate audio track per speaker — for example, a
+recording app that saves each participant's audio independently. Diarization is
+skipped entirely; speaker identity comes from the filename.
+
+**Zip layout:**
+
+```
+info.txt        ← recording metadata (see below)
+1-alice.aac     ← audio track for speaker "alice"
+2-bob.ogg       ← audio track for speaker "bob"
+3-carol.m4a     ← audio track for speaker "carol"
+```
+
+Audio files must be named `[number]-[speaker].[ext]`. The number controls
+sort order (cosmetic); the speaker label is taken from the filename stem after
+the first `-`.
+
+**`info.txt` format** (one line is sufficient):
+
+```
+Start time:  2026-04-27T11:51:12.426Z
+```
+
+The date is extracted from this line and used to name the output files. If
+`info.txt` is absent or the line is missing, today's date is used instead.
+
+**Output** (written next to the zip file):
+
+- **`meeting-YYYY-MM-DD.json`** — all segments as a JSON array
+- **`meeting-YYYY-MM-DD.md`** — Markdown transcript sorted chronologically
+
+Each track is transcribed independently using Whisper's chunk-level timestamps,
+then all segments from all speakers are merged in chronological order.
 
 ---
 
@@ -152,10 +194,24 @@ HF_HOME=/mnt/data/huggingface
 
 ### `main.py`
 
-The entry point. Parses the CLI argument, converts the input file to WAV if
-necessary (using pydub/ffmpeg, cleaned up after), calls `diarize()` then
-`transcribe()`, and writes the `.json` and `.md` output files next to the
-source audio.
+The entry point. Parses the CLI argument and dispatches to the correct mode:
+
+- **Audio file** — converts to WAV if necessary (pydub/ffmpeg, cleaned up
+  after), calls `diarize()` then `transcribe()`, writes `.json` and `.md`
+  output files next to the source audio.
+- **Zip file** — delegates entirely to `transcribe_zip.process_zip()`.
+
+### `transcribe_zip.py`
+
+Handles the multi-track zip pipeline:
+
+1. Extracts the zip to a temporary directory (cleaned up on exit).
+2. Parses `info.txt` for the recording date.
+3. Discovers audio tracks by scanning for files named `[number]-[speaker].[ext]`.
+4. Loads the Whisper model once, then transcribes each track using
+   `return_timestamps=True` to get chunk-level timestamps.
+5. Merges all segments from all tracks, sorted chronologically by start time.
+6. Writes `meeting-YYYY-MM-DD.json` and `meeting-YYYY-MM-DD.md` next to the zip.
 
 ### `diarize.py`
 

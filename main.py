@@ -1,14 +1,24 @@
-"""Entry point: diarize and transcribe an audio file.
+"""Entry point: diarize-and-transcribe an audio file, or transcribe a multi-track zip.
 
-Usage:
-    python main.py <audio_file>
+Usage — single audio file:
+    python main.py path/to/audio.mp3
 
-Supported formats: anything pydub/ffmpeg can read (mp3, m4a, wav, flac, ogg, …).
-The file is converted to WAV internally before processing; the original is untouched.
+    Supported formats: anything pydub/ffmpeg can read (mp3, m4a, wav, flac, ogg, …).
+    The file is converted to WAV internally; the original is untouched.
+    Output files are written next to the input:
+        audiofile.json  — full results as JSON
+        audiofile.md    — human-readable Markdown transcript
 
-Output files are written next to the input file:
-    audiofile.json  — full results as JSON
-    audiofile.md    — human-readable transcript in Markdown
+Usage — multi-track zip:
+    python main.py path/to/recording.zip
+
+    The zip must contain one audio file per speaker named ``[number]-[speaker].ext``
+    (e.g. ``1-alice.aac``, ``2-bob.ogg``) and an optional ``info.txt`` with metadata.
+    Diarization is skipped; each track is transcribed independently, then all
+    segments are merged chronologically.
+    Output files are written next to the zip:
+        meeting-YYYY-MM-DD.json
+        meeting-YYYY-MM-DD.md
 
 Set HF_HUB_OFFLINE=1 in .env (or the environment) to prevent all network calls
 after the models have been downloaded once.
@@ -95,19 +105,34 @@ def _write_markdown(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Diarize and transcribe an audio file using local models.",
+        description=(
+            "Diarize and transcribe an audio file, "
+            "or transcribe a multi-track zip of per-speaker audio files."
+        ),
     )
     parser.add_argument(
-        "audio_file",
-        help="Path to the audio file to process (mp3, m4a, wav, flac, …).",
+        "input_file",
+        help=(
+            "Path to an audio file (mp3, m4a, wav, flac, …) "
+            "or a zip file containing per-speaker audio tracks."
+        ),
     )
     args = parser.parse_args(argv)
 
-    audio_path = Path(args.audio_file).resolve()
-    if not audio_path.is_file():
-        print(f"error: file not found: {audio_path}", file=sys.stderr)
+    input_path = Path(args.input_file).resolve()
+    if not input_path.is_file():
+        print(f"error: file not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
+    # --- Zip mode: multi-track per-speaker recording ---
+    if input_path.suffix.lower() == ".zip":
+        from transcribe_zip import process_zip
+        print(f"Processing zip: {input_path.name}")
+        process_zip(input_path)
+        return
+
+    # --- Single audio file mode (original behaviour) ---
+    audio_path = input_path
     stem = audio_path.stem
     out_dir = audio_path.parent
     json_path = out_dir / f"{stem}.json"

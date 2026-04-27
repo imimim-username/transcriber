@@ -16,19 +16,22 @@ python main.py path/to/audio.mp3
 
 ```
 transcriber/
-├── main.py          # CLI entry point: arg parsing, WAV conversion, file output
-├── diarize.py       # Speaker diarization via pyannote.audio
-├── transcribe.py    # Speech-to-text via Whisper (HuggingFace Transformers)
+├── main.py              # CLI entry point: dispatches audio vs. zip mode
+├── diarize.py           # Speaker diarization via pyannote.audio
+├── transcribe.py        # Speech-to-text via Whisper (HuggingFace Transformers)
+├── transcribe_zip.py    # Multi-track zip pipeline (no diarization)
 ├── requirements.txt
 ├── .env.example
 ├── README.md
 └── context/
-    └── context.md   # This file
+    └── context.md       # This file
 ```
 
 ---
 
 ## How the pipeline works
+
+### Single audio file mode
 
 1. `main.py` takes an audio file path as a CLI argument
 2. If the file isn't already WAV, it's converted to a temp WAV via pydub/ffmpeg (cleaned up after)
@@ -37,6 +40,19 @@ transcriber/
 5. `main.py` writes two output files next to the source audio:
    - `{stem}.json` — full results array
    - `{stem}.md` — formatted Markdown transcript with bold speaker labels and UTC generation timestamp
+
+### Zip mode (multi-track per-speaker recording)
+
+1. `main.py` detects a `.zip` extension and delegates to `transcribe_zip.process_zip()`
+2. Zip is extracted to a `tempfile.mkdtemp()` directory (cleaned up in `finally`)
+3. `info.txt` is parsed for `Start time: YYYY-MM-DDThh:mm:ss.sssZ` → date used for output filenames
+4. Audio files are discovered by scanning for `[number]-[speaker].[ext]` filenames; sorted by number
+5. Whisper is loaded once (`openai/whisper-large-v3-turbo`)
+6. Each track is transcribed with `pipe(str(audio_path), return_timestamps=True)` — produces chunk-level timestamps; no diarization needed (speaker identity from filename)
+7. All segments from all tracks are merged and sorted chronologically by `start_time`
+8. Output written next to the zip:
+   - `meeting-YYYY-MM-DD.json`
+   - `meeting-YYYY-MM-DD.md`
 
 ---
 
@@ -78,6 +94,17 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — both `diarize.py` a
 ### `.env` loading
 - `load_dotenv()` is called at module level in both `main.py` and `diarize.py`
 - Points to `.env` in the project root (relative to `__file__`)
+
+### `transcribe_zip.py` implementation details
+
+- `process_zip(zip_path, *, model_id="openai/whisper-large-v3-turbo") -> tuple[Path, Path]` — public API
+- `parse_info_txt(info_path)` — regex `r"Start time:\s+(\d{4}-\d{2}-\d{2})T(\S+)"`, falls back to today's date
+- `_speaker_from_filename(name)` — regex `r"^\d+-(.+)$"` on stem: `"1-alice.aac"` → `"alice"`
+- `_load_model(model_id)` — same CUDA → MPS → CPU device detection and dtype logic as `transcribe.py`
+- `_transcribe_track(audio_path, speaker, pipe)` — calls `pipe(str(audio_path), return_timestamps=True)`, iterates `result["chunks"]`; handles `None` end timestamps with `end = start` fallback
+- tqdm progress bar over tracks (`unit="track"`); `tqdm.write()` for per-segment text output
+- `_AUDIO_EXTENSIONS` frozenset: `.mp3 .mp4 .m4a .aac .ogg .flac .wav .wma .opus .webm`
+- Imports `format_time` from `transcribe`
 
 ### Progress output (`transcribe.py`)
 Printed live as each segment is processed:
@@ -125,6 +152,16 @@ ffmpeg must also be installed system-wide for audio conversion.
 ## Pending / ideas discussed
 
 *(nothing currently open)*
+
+---
+
+## Recent changes
+
+### 2026-04-27
+- Added `transcribe_zip.py` — full multi-track zip pipeline (no diarization, speaker from filename, chronological merge)
+- Updated `main.py` to detect `.zip` extension and dispatch to `process_zip()`
+- Updated `README.md` with zip mode usage, zip layout, `info.txt` format, and output filename docs
+- Updated `How it works` section in `main.py` docstring to document both modes
 
 ---
 
