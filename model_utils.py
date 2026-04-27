@@ -56,6 +56,13 @@ def load_whisper(model_id: str) -> Any:
     model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
     model.to(device)
 
+    # Set language/task on generation_config so Whisper's internal .generate()
+    # handles them natively.  Passing them via generate_kwargs= on the pipeline
+    # causes a duplicate-logits-processor warning because .generate() also
+    # creates the same processors internally when it sees language/task.
+    model.generation_config.language = "en"
+    model.generation_config.task = "transcribe"
+
     processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_files_only)
 
     return pipeline(
@@ -65,5 +72,4 @@ def load_whisper(model_id: str) -> Any:
         feature_extractor=processor.feature_extractor,
         dtype=torch_dtype,
         device=device,
-        generate_kwargs={"language": "en", "task": "transcribe"},
     )

@@ -231,7 +231,13 @@ class TestLoadWhisper:
             assert result is pipe_mock
 
     def test_english_language_forced(self):
-        """Pipeline must be created with language='en' and task='transcribe'."""
+        """language='en' and task='transcribe' must be set on model.generation_config.
+
+        We set them there (not via pipeline generate_kwargs=) to avoid the
+        duplicate-logits-processor warning that transformers emits when both the
+        pipeline and Whisper's internal .generate() try to create the same
+        SuppressTokens processors.
+        """
         model_mock = MagicMock()
         processor_mock = MagicMock()
         pipe_mock = MagicMock()
@@ -248,5 +254,8 @@ class TestLoadWhisper:
 
             model_utils.load_whisper("openai/whisper-large-v3-turbo")
 
-            call_kwargs = model_utils.pipeline.call_args.kwargs
-            assert call_kwargs.get("generate_kwargs") == {"language": "en", "task": "transcribe"}
+            # language/task go on generation_config, NOT in pipeline generate_kwargs
+            assert model_mock.generation_config.language == "en"
+            assert model_mock.generation_config.task == "transcribe"
+            pipeline_kwargs = model_utils.pipeline.call_args.kwargs
+            assert "generate_kwargs" not in pipeline_kwargs
