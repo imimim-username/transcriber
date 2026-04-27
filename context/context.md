@@ -124,7 +124,7 @@ ffmpeg must also be installed system-wide for audio conversion.
 
 ## Pending / ideas discussed
 
-- **Progress bar for transcription** — user asked about adding one (2026-04-21). Not yet implemented. Current output is per-segment `[N/Total]` lines printed live. A bar (e.g. `tqdm`) could replace or supplement this.
+*(nothing currently open)*
 
 ---
 
