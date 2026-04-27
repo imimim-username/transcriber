@@ -120,13 +120,26 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — both `diarize.py` a
 - `_AUDIO_EXTENSIONS` frozenset: `.mp3 .mp4 .m4a .aac .ogg .flac .wav .wma .opus .webm`
 - Imports `format_time` from `transcribe`
 
-### Progress output (`transcribe.py`)
-Printed live as each segment is processed:
+### Progress output
+
+**`transcribe.py`** (single audio file mode) — printed live per diarized segment:
 ```
   [1/38] 00:00.480 → 00:03.820  SPEAKER_00
     Hey, how's it going?
 ```
-- `format_time()` is a public function in `transcribe.py`, imported by `main.py`
+
+**`transcribe_zip.py`** (zip mode) — printed live per track and per chunk:
+```
+── [1/2] alice (1-alice.aac) ──
+  Running Whisper inference…
+  [1/14] 00:00.000 → 00:02.400  alice
+    Hello there.
+  [2/14] 00:02.500 → 00:05.100  alice
+    How's it going?
+```
+- Outer tqdm bar tracks overall track progress (`desc="Tracks"`)
+- `tqdm.write()` used for all per-segment/per-chunk output to avoid clobbering the bar
+- `format_time()` is a public function in `transcribe.py`, imported by both `main.py` and `transcribe_zip.py`
 
 ### Output files
 - Written to the same directory as the input audio file, named after its stem
@@ -174,11 +187,13 @@ imports (`torch`, `transformers`, `pyannote`, `pydub`, `tqdm`, `dotenv`) into
 `sys.modules` before the production code is imported, so the suite runs in any
 plain Python environment with only `pytest` installed.
 
-83 tests total:
+89 tests total:
 - `test_transcribe.py` — `format_time`, `_offline`, `transcribe()`
 - `test_diarize.py` — token resolution, annotation parsing, `diarize()`
-- `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `process_zip()`
+- `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, progress output (spying on `tqdm.write`), `process_zip()`
 - `test_main.py` — `_to_wav`, output writers, `main()` dispatch and cleanup
+
+Progress output tests use `patch.object(transcribe_zip.tqdm, "write")` to spy on `tqdm.write` calls and assert correct format and ordering (e.g. "Running Whisper inference…" printed before `pipe()` is invoked).
 
 ---
 
@@ -196,6 +211,9 @@ plain Python environment with only `pytest` installed.
 - Updated `README.md` with zip mode usage, zip layout, `info.txt` format, and output filename docs
 - Added full test suite: 83 tests across 4 files; `conftest.py` stubs all ML deps so tests run with only pytest installed
 - Added pytest to `requirements.txt`; updated all documentation
+- Added progress output to `transcribe_zip.py`: "Running Whisper inference…" before each `pipe()` call, `[i/total_chunks]` chunk counter per segment line, `[idx/total_tracks]` counter in track section headers, tqdm bar desc changed to "Tracks"
+- Added 6 progress-output tests (89 total) using `patch.object(transcribe_zip.tqdm, "write")` to spy on tqdm calls
+- Added Mermaid flowchart to README.md showing both pipeline modes; replaced prose "How it works" section with a concise module reference table
 
 ---
 

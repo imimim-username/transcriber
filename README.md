@@ -198,6 +198,63 @@ HF_HOME=/mnt/data/huggingface
 
 ---
 
+## How the pipeline works
+
+```mermaid
+flowchart TD
+    Start(["python main.py INPUT"])
+    Start --> TypeCheck{"Input type?"}
+
+    %% ── Audio file branch ──────────────────────────────────────────
+    TypeCheck -->|"audio file\n.mp3  .m4a  .wav  …"| ToWav
+
+    ToWav["Convert to WAV\nif not already\npydub / ffmpeg"]
+    ToWav --> Diarize
+
+    Diarize["diarize.py\npyannote.audio\nwho spoke when?"]
+    Diarize --> DiarizeOut[/"segments\nstart · end · speaker"/]
+
+    DiarizeOut --> Transcribe
+    Transcribe["transcribe.py\nLoad Whisper once\nslice audio per segment\nrun inference"]
+    Transcribe --> AudioOut
+
+    AudioOut[["stem.json\nstem.md\n(next to input file)"]]
+
+    %% ── Zip branch ─────────────────────────────────────────────────
+    TypeCheck -->|".zip"| Extract
+
+    Extract["Extract zip\nto temp dir"]
+    Extract --> ParseInfo
+
+    ParseInfo["Parse info.txt\nextract recording date"]
+    ParseInfo --> DiscoverTracks
+
+    DiscoverTracks["Discover audio tracks\n1-speaker.ext  sorted by number"]
+    DiscoverTracks --> LoadModel
+
+    LoadModel["Load Whisper model\nopenai/whisper-large-v3-turbo"]
+    LoadModel --> ForEach
+
+    ForEach(["for each track"])
+    ForEach --> InferTrack
+
+    InferTrack["pipe full track audio\nreturn_timestamps=True"]
+    InferTrack --> ParseChunks
+
+    ParseChunks[/"chunk segments\nstart · end · text · speaker"/]
+    ParseChunks --> MoreTracks{"more\ntracks?"}
+
+    MoreTracks -->|yes| ForEach
+    MoreTracks -->|no| Merge
+
+    Merge["Merge all segments\nsort by start_time"]
+    Merge --> ZipOut
+
+    ZipOut[["meeting-YYYY-MM-DD.json\nmeeting-YYYY-MM-DD.md\n(next to zip file)"]]
+```
+
+---
+
 ## Running the tests
 
 The test suite requires only `pytest` — **no GPU, no model downloads, no
@@ -221,51 +278,17 @@ pytest tests/ -v
 
 ---
 
-## How it works
+## Module reference
 
-### `main.py`
+| File | Role |
+|---|---|
+| `main.py` | CLI entry point — parses args, dispatches to audio or zip mode, writes output files |
+| `diarize.py` | Speaker diarization via `pyannote.audio` — returns `{start, end, speaker}` segments |
+| `transcribe.py` | Whisper transcription per diarized segment — slices audio, runs inference, prints progress |
+| `transcribe_zip.py` | Full zip pipeline — extract, parse `info.txt`, transcribe each track, merge chronologically |
 
-The entry point. Parses the CLI argument and dispatches to the correct mode:
-
-- **Audio file** — converts to WAV if necessary (pydub/ffmpeg, cleaned up
-  after), calls `diarize()` then `transcribe()`, writes `.json` and `.md`
-  output files next to the source audio.
-- **Zip file** — delegates entirely to `transcribe_zip.process_zip()`.
-
-### `transcribe_zip.py`
-
-Handles the multi-track zip pipeline:
-
-1. Extracts the zip to a temporary directory (cleaned up on exit).
-2. Parses `info.txt` for the recording date.
-3. Discovers audio tracks by scanning for files named `[number]-[speaker].[ext]`.
-4. Loads the Whisper model once, then transcribes each track using
-   `return_timestamps=True` to get chunk-level timestamps.
-5. Merges all segments from all tracks, sorted chronologically by start time.
-6. Writes `meeting-YYYY-MM-DD.json` and `meeting-YYYY-MM-DD.md` next to the zip.
-
-### `diarize.py`
-
-Uses `pyannote.audio`'s `Pipeline` to perform speaker diarization:
-
-- Detects segments of continuous speech
-- Assigns a speaker label (e.g. `SPEAKER_00`, `SPEAKER_01`) to each segment
-- Returns a list of `{"start_time", "end_time", "speaker"}` dicts sorted by time
-
-Device selection: **CUDA → MPS (Apple Silicon) → CPU**, auto-detected at runtime.
-
-### `transcribe.py`
-
-Uses HuggingFace Transformers to run `openai/whisper-large-v3-turbo`. For each
-diarized segment it:
-
-- Slices that portion of audio from the original file
-- Writes it to a temporary WAV file
-- Runs Whisper inference and prints the result immediately
-- Cleans up the temp file
-
-Device selection: **CUDA → MPS → CPU**, auto-detected at runtime.
-Dtype: `float16` on CUDA, `float32` on MPS and CPU.
+All modules auto-detect the best available device: **CUDA → MPS (Apple Silicon) → CPU**.
+Whisper uses `float16` on CUDA and `float32` on MPS/CPU (float16 has incomplete op support on MPS).
 SDPA attention is enabled on CUDA for better performance.
 
 ---

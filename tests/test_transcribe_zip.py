@@ -245,6 +245,123 @@ class TestTranscribeTrack:
 
 
 # ---------------------------------------------------------------------------
+# Progress output — _transcribe_track and process_zip
+# ---------------------------------------------------------------------------
+
+class TestProgressOutput:
+    """Verify that progress text is emitted in the expected format."""
+
+    def _make_wav(self, path: Path) -> None:
+        with wave.open(str(path), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * 16000)
+
+    def test_running_inference_message_emitted(self, tmp_path: Path):
+        import transcribe_zip
+        audio = tmp_path / "track.wav"
+        self._make_wav(audio)
+        pipe = MagicMock(return_value={"chunks": []})
+
+        written: list[str] = []
+        with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+            _transcribe_track(audio, "alice", pipe)
+
+        assert any("Running Whisper inference" in m for m in written)
+
+    def test_inference_message_printed_before_pipe_called(self, tmp_path: Path):
+        """'Running Whisper inference…' must appear before the pipe is invoked."""
+        import transcribe_zip
+        audio = tmp_path / "track.wav"
+        self._make_wav(audio)
+
+        call_order: list[str] = []
+
+        def fake_write(msg: str) -> None:
+            if "Running Whisper" in msg:
+                call_order.append("write")
+
+        def fake_pipe(path: str, **kwargs: Any) -> dict:
+            call_order.append("pipe")
+            return {"chunks": []}
+
+        with patch.object(transcribe_zip.tqdm, "write", side_effect=fake_write):
+            _transcribe_track(audio, "alice", fake_pipe)
+
+        assert call_order == ["write", "pipe"]
+
+    def test_chunk_counter_format(self, tmp_path: Path):
+        """Segment lines include [i/total] chunk counter."""
+        import transcribe_zip
+        audio = tmp_path / "track.wav"
+        self._make_wav(audio)
+        pipe = MagicMock(return_value={"chunks": [
+            {"text": "first",  "timestamp": (0.0, 1.0)},
+            {"text": "second", "timestamp": (1.0, 2.0)},
+        ]})
+
+        written: list[str] = []
+        with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+            _transcribe_track(audio, "alice", pipe)
+
+        segment_lines = [m for m in written if "→" in m]
+        assert any("[1/2]" in m for m in segment_lines)
+        assert any("[2/2]" in m for m in segment_lines)
+
+    def test_chunk_counter_includes_speaker(self, tmp_path: Path):
+        import transcribe_zip
+        audio = tmp_path / "track.wav"
+        self._make_wav(audio)
+        pipe = MagicMock(return_value={"chunks": [
+            {"text": "hello", "timestamp": (0.0, 1.0)},
+        ]})
+
+        written: list[str] = []
+        with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+            _transcribe_track(audio, "gorby", pipe)
+
+        segment_lines = [m for m in written if "→" in m]
+        assert any("gorby" in m for m in segment_lines)
+
+    def test_process_zip_track_header_has_counter(self, tmp_path: Path):
+        """Track section headers include [idx/total] counter."""
+        import transcribe_zip
+        from transcribe_zip import process_zip
+
+        wav = _make_wav_bytes()
+        zp = _make_zip(tmp_path, [
+            ("1-alice.wav", wav),
+            ("2-bob.wav",   wav),
+        ])
+
+        written: list[str] = []
+        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+            with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+                process_zip(zp)
+
+        headers = [m for m in written if "──" in m]
+        assert any("[1/2]" in h for h in headers)
+        assert any("[2/2]" in h for h in headers)
+
+    def test_process_zip_track_header_includes_speaker_and_filename(self, tmp_path: Path):
+        import transcribe_zip
+        from transcribe_zip import process_zip
+
+        wav = _make_wav_bytes()
+        zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
+
+        written: list[str] = []
+        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+            with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
+                process_zip(zp)
+
+        headers = [m for m in written if "──" in m]
+        assert any("alice" in h for h in headers)
+        assert any("1-alice.wav" in h for h in headers)
+
+
+# ---------------------------------------------------------------------------
 # process_zip() — full integration with mocked model
 # ---------------------------------------------------------------------------
 
