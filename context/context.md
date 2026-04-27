@@ -136,6 +136,7 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 - `parse_info_txt(info_path)` — regex `r"Start time:\s+(\d{4}-\d{2}-\d{2})T(\S+)"`, falls back to today's date
 - `_speaker_from_filename(name)` — regex `r"^\d+-(.+)$"` on stem: `"1-alice.aac"` → `"alice"`
 - Uses `load_whisper(model_id)` from `model_utils` (no local device/dtype logic)
+- Audio file discovery uses `tmp_dir.rglob("*")` — scans recursively, so audio files anywhere in the zip (nested subdirectories included) are found; sorted by leading number
 - `_transcribe_track(audio_path, speaker, pipe)` — calls `pipe(str(audio_path), return_timestamps=True)`, iterates `result["chunks"]`; handles `None` end timestamps with `end = start` fallback
 - tqdm progress bar over tracks (`unit="track"`); `tqdm.write()` for per-segment text output
 - `_AUDIO_EXTENSIONS` frozenset: `.mp3 .mp4 .m4a .aac .ogg .flac .wav .wma .opus .webm`
@@ -210,11 +211,11 @@ imports (`torch`, `transformers`, `pyannote`, `pydub`, `tqdm`, `dotenv`) into
 `sys.modules` before the production code is imported, so the suite runs in any
 plain Python environment with only `pytest` installed.
 
-105 tests total:
+107 tests total:
 - `test_model_utils.py` — `offline()`, `load_whisper()` device selection, SDPA flag, offline/online `local_files_only`, English language forced, return value
 - `test_transcribe.py` — `format_time` (including hours and two-hour cases), `transcribe()`, `pipe=` injection bypasses `load_whisper`
 - `test_diarize.py` — token resolution, annotation parsing, `diarize()`
-- `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall` (safe extraction + path-traversal rejection + nested paths), progress output (spying on `tqdm.write`), `process_zip()`
+- `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall` (safe extraction + path-traversal rejection + nested paths), recursive subdirectory discovery, progress output (spying on `tqdm.write`), `process_zip()`
 - `test_main.py` — `_to_wav`, output writers, `main()` dispatch and cleanup
 
 Progress output tests use `patch.object(transcribe_zip.tqdm, "write")` to spy on `tqdm.write` calls and assert correct format and ordering (e.g. "Running Whisper inference…" printed before `pipe()` is invoked).
@@ -234,13 +235,19 @@ Patch targets after `model_utils` refactor:
 
 ## Recent changes
 
+### 2026-04-27 (post-feedback fixes)
+- Fixed `pipeline()` call in `model_utils.py`: changed `torch_dtype=torch_dtype` → `dtype=torch_dtype`; `torch_dtype=` is deprecated in newer transformers for both `from_pretrained()` and `pipeline()`
+- Fixed `diarize._resolve_hf_token()` to check both `HF_HUB_OFFLINE` **and** `TRANSFORMERS_OFFLINE` — was only checking `HF_HUB_OFFLINE`; added `test_returns_none_when_transformers_offline` test
+- Switched zip audio file discovery from `iterdir()` to `rglob("*")` — now scans recursively so audio files in subdirectories within the zip are found; added `test_audio_files_in_subdirectory_discovered` test
+- 107 tests total across 5 files; all passing
+
 ### 2026-04-27 (feedback batch)
 - Extracted `model_utils.py` — shared `offline()` and `load_whisper()` functions; eliminates duplication between `transcribe.py` and `transcribe_zip.py`
 - `transcribe()` now accepts an optional `pipe=` parameter; pass a pre-loaded pipeline to skip model loading on repeated calls
 - Added `_safe_extractall()` to `transcribe_zip.py` — rejects zip members with path-traversal (e.g. `../`) attacks via `Path.resolve()` + `relative_to()` check
 - Fixed `format_time()` to display `H:MM:SS.mmm` for audio ≥ 1 hour; uses integer millisecond arithmetic to avoid float rounding errors
 - Pinned all `requirements.txt` entries with `>=` version constraints
-- Added `tests/test_model_utils.py` (12 new tests): `offline()` and `load_whisper()` coverage
+- Added `tests/test_model_utils.py` (13 new tests): `offline()` and `load_whisper()` coverage
 - Updated `tests/test_transcribe.py`: removed `_offline`/`TestOffline`, updated `_patch_pipeline` to use `patch("transcribe.load_whisper")`, added `test_injected_pipe_used_directly`, fixed and expanded `format_time` tests (hours, two-hour cases)
 - Updated `tests/test_transcribe_zip.py`: changed `_load_model` patch targets to `load_whisper`; added `TestSafeExtractall` (3 tests)
 - 104 tests total across 5 files; all passing

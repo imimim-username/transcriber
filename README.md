@@ -150,7 +150,8 @@ info.txt        ← recording metadata (see below)
 
 Audio files must be named `[number]-[speaker].[ext]`. The number controls
 sort order (cosmetic); the speaker label is taken from the filename stem after
-the first `-`.
+the first `-`. Audio files can be at the top level or inside subdirectories —
+the zip is scanned recursively.
 
 **`info.txt` format** (one line is sufficient):
 
@@ -231,7 +232,7 @@ flowchart TD
     ParseInfo["Parse info.txt\nextract recording date"]
     ParseInfo --> DiscoverTracks
 
-    DiscoverTracks["Discover audio tracks\n1-speaker.ext  sorted by number"]
+    DiscoverTracks["Discover audio tracks\nrglob recursive scan\n1-speaker.ext  sorted by number"]
     DiscoverTracks --> LoadModel
 
     LoadModel["Load Whisper model\nopenai/whisper-large-v3-turbo"]
@@ -269,7 +270,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-104 tests across five files:
+107 tests across five files:
 
 | Test file | What it covers |
 |---|---|
@@ -332,4 +333,4 @@ audio. For CPU-only machines, switch to `openai/whisper-base` in `transcribe.py`
 **MPS errors on Apple Silicon**
 Make sure you have PyTorch 2.0+ installed. If you hit unsupported op errors,
 the model will need to run on CPU — remove the MPS branch from `_inference_device()`
-in `diarize.py` and the MPS check in `transcribe.py` as a workaround.
+in `diarize.py` and the MPS check in `model_utils.py` as a workaround.
