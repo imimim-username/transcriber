@@ -267,13 +267,14 @@ pip install pytest
 pytest tests/ -v
 ```
 
-83 tests across four files:
+104 tests across five files:
 
 | Test file | What it covers |
 |---|---|
-| `tests/test_transcribe.py` | `format_time`, `_offline`, `transcribe()` |
+| `tests/test_model_utils.py` | `offline()`, `load_whisper()` device selection and model calls |
+| `tests/test_transcribe.py` | `format_time` (including hours), `transcribe()`, `pipe=` injection |
 | `tests/test_diarize.py` | Token resolution, annotation parsing, `diarize()` |
-| `tests/test_transcribe_zip.py` | `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `process_zip()` |
+| `tests/test_transcribe_zip.py` | `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall`, `process_zip()` |
 | `tests/test_main.py` | `_to_wav`, output writers, `main()` dispatch and cleanup |
 
 ---
@@ -285,7 +286,8 @@ pytest tests/ -v
 | `main.py` | CLI entry point — parses args, dispatches to audio or zip mode, writes output files |
 | `diarize.py` | Speaker diarization via `pyannote.audio` — returns `{start, end, speaker}` segments |
 | `transcribe.py` | Whisper transcription per diarized segment — slices audio, runs inference, prints progress |
-| `transcribe_zip.py` | Full zip pipeline — extract, parse `info.txt`, transcribe each track, merge chronologically |
+| `transcribe_zip.py` | Full zip pipeline — extract (with path-traversal protection), parse `info.txt`, transcribe each track, merge chronologically |
+| `model_utils.py` | Shared Whisper model loading — `offline()` and `load_whisper()` used by both transcription modules |
 
 All modules auto-detect the best available device: **CUDA → MPS (Apple Silicon) → CPU**.
 Whisper uses `float16` on CUDA and `float32` on MPS/CPU (float16 has incomplete op support on MPS).

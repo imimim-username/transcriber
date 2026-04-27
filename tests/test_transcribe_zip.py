@@ -336,7 +336,7 @@ class TestProgressOutput:
         ])
 
         written: list[str] = []
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
                 process_zip(zp)
 
@@ -352,7 +352,7 @@ class TestProgressOutput:
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
 
         written: list[str] = []
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             with patch.object(transcribe_zip.tqdm, "write", side_effect=written.append):
                 process_zip(zp)
 
@@ -410,7 +410,7 @@ class TestProcessZip:
     def test_no_audio_files_raises(self, tmp_path: Path):
         from transcribe_zip import process_zip
         zp = _make_zip(tmp_path, [], info_content="Start time: 2026-04-27T00:00:00Z\n")
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             with pytest.raises(RuntimeError, match="No audio files found"):
                 process_zip(zp)
 
@@ -420,7 +420,7 @@ class TestProcessZip:
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
         mock_pipe = _make_mock_pipe()
 
-        with patch("transcribe_zip._load_model", return_value=mock_pipe):
+        with patch("transcribe_zip.load_whisper", return_value=mock_pipe):
             json_path, md_path = process_zip(zp)
 
         assert json_path.exists()
@@ -431,7 +431,7 @@ class TestProcessZip:
         wav = _make_wav_bytes()
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)],
                        info_content="Start time:  2026-07-04T12:00:00Z\n")
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             json_path, md_path = process_zip(zp)
 
         assert json_path.name == "meeting-2026-07-04.json"
@@ -441,7 +441,7 @@ class TestProcessZip:
         from transcribe_zip import process_zip
         wav = _make_wav_bytes()
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             json_path, md_path = process_zip(zp)
 
         assert json_path.parent == tmp_path
@@ -452,7 +452,7 @@ class TestProcessZip:
         wav = _make_wav_bytes()
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
         chunks = [{"text": "hello zip", "timestamp": (0.0, 1.5)}]
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe(chunks)):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe(chunks)):
             json_path, _ = process_zip(zp)
 
         data = json.loads(json_path.read_text())
@@ -481,7 +481,7 @@ class TestProcessZip:
 
         mock_pipe = MagicMock(side_effect=pipe_factory_side_effect)
 
-        with patch("transcribe_zip._load_model", return_value=mock_pipe):
+        with patch("transcribe_zip.load_whisper", return_value=mock_pipe):
             json_path, _ = process_zip(zp)
 
         data = json.loads(json_path.read_text())
@@ -495,7 +495,7 @@ class TestProcessZip:
         wav = _make_wav_bytes()
         zp = _make_zip(tmp_path, [("3-gorby.wav", wav)])
         chunks = [{"text": "hi", "timestamp": (0.0, 1.0)}]
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe(chunks)):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe(chunks)):
             json_path, _ = process_zip(zp)
 
         data = json.loads(json_path.read_text())
@@ -509,7 +509,7 @@ class TestProcessZip:
         existing_tmps = set(Path(tempfile.gettempdir()).glob("transcriber_zip_*"))
         wav = _make_wav_bytes()
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)])
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             process_zip(zp)
 
         remaining = set(Path(tempfile.gettempdir()).glob("transcriber_zip_*")) - existing_tmps
@@ -523,7 +523,57 @@ class TestProcessZip:
         zp = _make_zip(tmp_path, [("1-alice.wav", wav)], info_content=None)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        with patch("transcribe_zip._load_model", return_value=_make_mock_pipe()):
+        with patch("transcribe_zip.load_whisper", return_value=_make_mock_pipe()):
             json_path, _ = process_zip(zp)
 
         assert json_path.name == f"meeting-{today}.json"
+
+
+# ---------------------------------------------------------------------------
+# _safe_extractall — path traversal protection
+# ---------------------------------------------------------------------------
+
+from transcribe_zip import _safe_extractall
+
+
+class TestSafeExtractall:
+    def test_safe_extraction_works(self, tmp_path: Path):
+        """Normal zip members extract without error."""
+        zp = tmp_path / "test.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            zf.writestr("info.txt", "hello")
+            zf.writestr("1-alice.wav", b"fake audio")
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with zipfile.ZipFile(zp, "r") as zf:
+            _safe_extractall(zf, dest)
+
+        assert (dest / "info.txt").exists()
+        assert (dest / "1-alice.wav").exists()
+
+    def test_path_traversal_rejected(self, tmp_path: Path):
+        """A zip with a '../' member must raise RuntimeError."""
+        zp = tmp_path / "evil.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            # Manually add a path-traversal entry
+            zf.writestr("../evil.txt", "malicious content")
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with zipfile.ZipFile(zp, "r") as zf:
+            with pytest.raises(RuntimeError, match="unsafe zip member"):
+                _safe_extractall(zf, dest)
+
+    def test_nested_paths_are_safe(self, tmp_path: Path):
+        """Subdirectory members that stay within dest are allowed."""
+        zp = tmp_path / "nested.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            zf.writestr("subdir/file.txt", "content")
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with zipfile.ZipFile(zp, "r") as zf:
+            _safe_extractall(zf, dest)  # should not raise
+
+        assert (dest / "subdir" / "file.txt").exists()

@@ -1,4 +1,4 @@
-"""Tests for transcribe.py — format_time, _offline, and transcribe()."""
+"""Tests for transcribe.py — format_time and transcribe()."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import pytest
 # format_time
 # ---------------------------------------------------------------------------
 
-from transcribe import format_time, _offline
+from transcribe import format_time
 
 
 class TestFormatTime:
@@ -35,38 +35,22 @@ class TestFormatTime:
     def test_millisecond_precision(self):
         assert format_time(0.001) == "00:00.001"
 
-    def test_large_value(self):
-        # 1 hour, 23 minutes, 45.678 seconds
-        assert format_time(3600 + 23 * 60 + 45.678) == "83:45.678"
+    def test_large_value_sub_hour(self):
+        # 59 minutes 45 seconds 678 ms — under 1 hour → MM:SS.mmm
+        assert format_time(59 * 60 + 45.678) == "59:45.678"
+
+    def test_exactly_one_hour(self):
+        assert format_time(3600.0) == "1:00:00.000"
+
+    def test_hours_display(self):
+        # 1 hour, 23 minutes, 45.678 seconds → H:MM:SS.mmm
+        assert format_time(3600 + 23 * 60 + 45.678) == "1:23:45.678"
 
     def test_fractional_seconds(self):
         assert format_time(9.999) == "00:09.999"
 
-
-# ---------------------------------------------------------------------------
-# _offline
-# ---------------------------------------------------------------------------
-
-class TestOffline:
-    def test_default_is_online(self, monkeypatch):
-        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
-        assert _offline() is False
-
-    def test_hf_hub_offline_flag(self, monkeypatch):
-        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
-        assert _offline() is True
-
-    def test_transformers_offline_flag(self, monkeypatch):
-        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-        monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
-        assert _offline() is True
-
-    def test_zero_value_is_online(self, monkeypatch):
-        monkeypatch.setenv("HF_HUB_OFFLINE", "0")
-        monkeypatch.setenv("TRANSFORMERS_OFFLINE", "0")
-        assert _offline() is False
+    def test_two_hours(self):
+        assert format_time(2 * 3600 + 5 * 60 + 3.001) == "2:05:03.001"
 
 
 # ---------------------------------------------------------------------------
@@ -109,18 +93,13 @@ class TestTranscribe:
     """Tests for transcribe() with mocked Whisper model."""
 
     def _patch_pipeline(self, mock_text: str = "hi"):
-        """Context manager that patches all HF loading and returns a fake pipe."""
+        """Return a (patch context-manager, mock_pipe) pair.
+
+        Patches ``transcribe.load_whisper`` so the model is never actually loaded.
+        """
         mock_pipe = _mock_pipe_factory(mock_text)
-
-        model_mock = MagicMock()
-        processor_mock = MagicMock()
-
-        patches = [
-            patch("transcribe.AutoModelForSpeechSeq2Seq.from_pretrained", return_value=model_mock),
-            patch("transcribe.AutoProcessor.from_pretrained", return_value=processor_mock),
-            patch("transcribe.pipeline", return_value=mock_pipe),
-        ]
-        return patches, mock_pipe
+        ctx = patch("transcribe.load_whisper", return_value=mock_pipe)
+        return ctx, mock_pipe
 
     def test_missing_file_raises(self):
         from transcribe import transcribe
@@ -129,8 +108,8 @@ class TestTranscribe:
 
     def test_empty_segments_returns_empty(self, wav_file: Path):
         from transcribe import transcribe
-        patches, mock_pipe = self._patch_pipeline()
-        with patches[0], patches[1], patches[2]:
+        ctx, mock_pipe = self._patch_pipeline()
+        with ctx:
             result = transcribe(str(wav_file), [])
         assert result == []
         mock_pipe.assert_not_called()
@@ -138,16 +117,16 @@ class TestTranscribe:
     def test_returns_one_result_per_segment(self, wav_file: Path):
         from transcribe import transcribe
         segments = _make_segments()
-        patches, mock_pipe = self._patch_pipeline("hey")
-        with patches[0], patches[1], patches[2]:
+        ctx, mock_pipe = self._patch_pipeline("hey")
+        with ctx:
             result = transcribe(str(wav_file), segments)
         assert len(result) == len(segments)
 
     def test_result_structure(self, wav_file: Path):
         from transcribe import transcribe
         seg = {"start_time": 0.0, "end_time": 0.5, "speaker": "SPEAKER_00"}
-        patches, _ = self._patch_pipeline("hello world")
-        with patches[0], patches[1], patches[2]:
+        ctx, _ = self._patch_pipeline("hello world")
+        with ctx:
             result = transcribe(str(wav_file), [seg])
         assert result[0]["segmentInfo"] is seg
         assert result[0]["text"] == "hello world"
@@ -155,8 +134,8 @@ class TestTranscribe:
     def test_zero_length_segment_skipped(self, wav_file: Path):
         from transcribe import transcribe
         seg = {"start_time": 0.5, "end_time": 0.5, "speaker": "SPEAKER_00"}
-        patches, mock_pipe = self._patch_pipeline()
-        with patches[0], patches[1], patches[2]:
+        ctx, mock_pipe = self._patch_pipeline()
+        with ctx:
             result = transcribe(str(wav_file), [seg])
         # Zero-length segments are skipped (not added to results)
         assert result == []
@@ -166,22 +145,28 @@ class TestTranscribe:
         from transcribe import transcribe
 
         error_pipe = MagicMock(side_effect=RuntimeError("inference exploded"))
-        model_mock = MagicMock()
-        processor_mock = MagicMock()
-
         seg = {"start_time": 0.0, "end_time": 0.5, "speaker": "SPEAKER_00"}
-        with (
-            patch("transcribe.AutoModelForSpeechSeq2Seq.from_pretrained", return_value=model_mock),
-            patch("transcribe.AutoProcessor.from_pretrained", return_value=processor_mock),
-            patch("transcribe.pipeline", return_value=error_pipe),
-        ):
+        with patch("transcribe.load_whisper", return_value=error_pipe):
             result = transcribe(str(wav_file), [seg])
         assert result[0]["text"] == ""
 
     def test_text_is_stripped(self, wav_file: Path):
         from transcribe import transcribe
         seg = {"start_time": 0.0, "end_time": 0.5, "speaker": "SPEAKER_00"}
-        patches, _ = self._patch_pipeline("  padded  ")
-        with patches[0], patches[1], patches[2]:
+        ctx, _ = self._patch_pipeline("  padded  ")
+        with ctx:
             result = transcribe(str(wav_file), [seg])
         assert result[0]["text"] == "padded"
+
+    def test_injected_pipe_used_directly(self, wav_file: Path):
+        """When pipe= is supplied, load_whisper must NOT be called."""
+        from transcribe import transcribe
+
+        pre_loaded_pipe = _mock_pipe_factory("pre-loaded result")
+        seg = {"start_time": 0.0, "end_time": 0.5, "speaker": "SPEAKER_00"}
+
+        with patch("transcribe.load_whisper") as mock_load:
+            result = transcribe(str(wav_file), [seg], pipe=pre_loaded_pipe)
+
+        mock_load.assert_not_called()
+        assert result[0]["text"] == "pre-loaded result"

@@ -25,7 +25,6 @@ Both output files are written next to the zip file.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import tempfile
@@ -34,10 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import torch
 from tqdm import tqdm
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
+from model_utils import load_whisper
 from transcribe import format_time
 
 
@@ -51,50 +49,22 @@ _AUDIO_EXTENSIONS: frozenset[str] = frozenset(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _offline() -> bool:
-    """Return True when any HuggingFace offline env var is set."""
-    return (
-        os.environ.get("HF_HUB_OFFLINE", "0") == "1"
-        or os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
-    )
+def _safe_extractall(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract all zip members to *dest*, rejecting path-traversal entries.
 
-
-def _load_model(model_id: str) -> Any:
-    """Load Whisper and return a HuggingFace *pipeline* object."""
-    if torch.cuda.is_available():
-        device = "cuda:0"
-        torch_dtype = torch.float16
-    elif torch.backends.mps.is_available():
-        device = "mps"
-        torch_dtype = torch.float32  # float16 has incomplete op support on MPS
-    else:
-        device = "cpu"
-        torch_dtype = torch.float32
-
-    local_files_only = _offline()
-
-    model_kwargs: dict[str, Any] = {
-        "dtype": torch_dtype,
-        "low_cpu_mem_usage": True,
-        "use_safetensors": True,
-        "local_files_only": local_files_only,
-    }
-    if device.startswith("cuda"):
-        model_kwargs["attn_implementation"] = "sdpa"
-
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
-    model.to(device)
-
-    processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_files_only)
-
-    return pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-    )
+    Raises :class:`RuntimeError` if any member's resolved path would fall
+    outside *dest* (e.g. a ``../`` attack).
+    """
+    dest_resolved = dest.resolve()
+    for member in zf.infolist():
+        target = (dest_resolved / member.filename).resolve()
+        try:
+            target.relative_to(dest_resolved)
+        except ValueError:
+            raise RuntimeError(
+                f"Refusing to extract unsafe zip member: {member.filename!r}"
+            )
+        zf.extract(member, dest)
 
 
 def parse_info_txt(info_path: Path) -> dict[str, str]:
@@ -243,6 +213,9 @@ def process_zip(
         meeting-YYYY-MM-DD.md
 
     Both files are written next to ``zip_path``.  Returns ``(json_path, md_path)``.
+
+    The zip is extracted with path-traversal protection: any member whose
+    resolved path falls outside the temporary directory raises :class:`RuntimeError`.
     """
     zip_path = Path(zip_path).resolve()
     if not zip_path.is_file():
@@ -250,9 +223,9 @@ def process_zip(
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="transcriber_zip_"))
     try:
-        # --- Extract ---
+        # --- Extract (with path-traversal protection) ---
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmp_dir)
+            _safe_extractall(zf, tmp_dir)
 
         # --- Parse info.txt ---
         info_file = tmp_dir / "info.txt"
@@ -279,7 +252,7 @@ def process_zip(
 
         # --- Load model once ---
         print(f"Found {len(audio_entries)} track(s). Loading Whisper model…")
-        pipe = _load_model(model_id)
+        pipe = load_whisper(model_id)
 
         # --- Transcribe each track ---
         all_segments: list[dict[str, Any]] = []

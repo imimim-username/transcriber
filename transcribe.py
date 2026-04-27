@@ -7,24 +7,27 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import torch
 from pydub import AudioSegment
 from tqdm import tqdm
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+from model_utils import load_whisper
 
 
 def format_time(seconds: float) -> str:
-    """Format *seconds* as ``MM:SS.mmm``."""
-    m, s = divmod(seconds, 60)
-    return f"{int(m):02d}:{s:06.3f}"
+    """Format *seconds* as ``MM:SS.mmm``, or ``H:MM:SS.mmm`` for >= 1 hour.
 
-
-def _offline() -> bool:
-    """Return True when the HuggingFace offline env vars are set."""
-    return (
-        os.environ.get("HF_HUB_OFFLINE", "0") == "1"
-        or os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
-    )
+    Uses integer millisecond arithmetic to avoid floating-point rounding errors.
+    """
+    total_ms = round(float(seconds) * 1000)
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    s = total_s % 60
+    total_m = total_s // 60
+    m = total_m % 60
+    h = total_m // 60
+    if h:
+        return f"{h}:{m:02d}:{s:02d}.{ms:03d}"
+    return f"{m:02d}:{s:02d}.{ms:03d}"
 
 
 def transcribe(
@@ -32,6 +35,7 @@ def transcribe(
     diarized_segments: list[dict[str, Any]],
     *,
     model_id: str = "openai/whisper-large-v3-turbo",
+    pipe: Any = None,
 ) -> list[dict[str, Any]]:
     """Transcribe ``audio_path`` for each diarized segment.
 
@@ -39,6 +43,11 @@ def transcribe(
     item ``{"start_time": float, "end_time": float, "speaker": str}`` (seconds).
 
     Returns a list of ``{"segmentInfo": segment_dict, "text": str}``.
+
+    Pass a pre-loaded pipeline via ``pipe`` to skip model loading (useful when
+    calling :func:`transcribe` multiple times in the same process).  If ``pipe``
+    is ``None`` (the default), :func:`model_utils.load_whisper` is called once
+    internally.
 
     Set ``HF_HUB_OFFLINE=1`` or ``TRANSFORMERS_OFFLINE=1`` in the environment
     (or in ``.env``) to prevent any network access — models must be cached first.
@@ -51,39 +60,8 @@ def transcribe(
 
     audio = AudioSegment.from_file(str(path))
 
-    if torch.cuda.is_available():
-        device = "cuda:0"
-        torch_dtype = torch.float16
-    elif torch.backends.mps.is_available():
-        device = "mps"
-        torch_dtype = torch.float32  # float16 has incomplete op support on MPS
-    else:
-        device = "cpu"
-        torch_dtype = torch.float32
-    local_files_only = _offline()
-
-    model_kwargs: dict[str, Any] = {
-        "dtype": torch_dtype,
-        "low_cpu_mem_usage": True,
-        "use_safetensors": True,
-        "local_files_only": local_files_only,
-    }
-    if device.startswith("cuda"):
-        model_kwargs["attn_implementation"] = "sdpa"
-
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id, **model_kwargs)
-    model.to(device)
-
-    processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_files_only)
-
-    pipe = pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-    )
+    if pipe is None:
+        pipe = load_whisper(model_id)
 
     transcribed: list[dict[str, Any]] = []
     total = len(diarized_segments)
