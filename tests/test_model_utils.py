@@ -229,3 +229,24 @@ class TestLoadWhisper:
             result = model_utils.load_whisper("openai/whisper-large-v3-turbo")
 
             assert result is pipe_mock
+
+    def test_english_language_forced(self):
+        """Pipeline must be created with language='en' and task='transcribe'."""
+        model_mock = MagicMock()
+        processor_mock = MagicMock()
+        pipe_mock = MagicMock()
+
+        with (
+            patch.object(model_utils.torch.cuda, "is_available", return_value=False),
+            patch.object(model_utils.torch.backends.mps, "is_available", return_value=False),
+            patch.object(model_utils, "AutoModelForSpeechSeq2Seq") as mock_model_cls,
+            patch.object(model_utils, "AutoProcessor") as mock_proc_cls,
+            patch.object(model_utils, "pipeline", return_value=pipe_mock),
+        ):
+            mock_model_cls.from_pretrained.return_value = model_mock
+            mock_proc_cls.from_pretrained.return_value = processor_mock
+
+            model_utils.load_whisper("openai/whisper-large-v3-turbo")
+
+            call_kwargs = model_utils.pipeline.call_args.kwargs
+            assert call_kwargs.get("generate_kwargs") == {"language": "en", "task": "transcribe"}

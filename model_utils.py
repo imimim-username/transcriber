@@ -65,4 +65,5 @@ def load_whisper(model_id: str) -> Any:
         feature_extractor=processor.feature_extractor,
         torch_dtype=torch_dtype,
         device=device,
+        generate_kwargs={"language": "en", "task": "transcribe"},
     )

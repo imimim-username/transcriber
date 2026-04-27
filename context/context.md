@@ -94,6 +94,8 @@ Both `transcribe.py` and `transcribe_zip.py` import from `model_utils` and conta
 
 `transcribe()` accepts an optional `pipe=` parameter — if a pre-loaded pipeline is passed in, `load_whisper()` is skipped entirely. This allows the caller to load the model once and reuse it across multiple calls.
 
+The pipeline is always created with `generate_kwargs={"language": "en", "task": "transcribe"}` to suppress Whisper's multilingual language-detection and force English transcription.
+
 ### Device selection
 Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` and `diarize.py` both follow this.
 
@@ -209,8 +211,8 @@ imports (`torch`, `transformers`, `pyannote`, `pydub`, `tqdm`, `dotenv`) into
 `sys.modules` before the production code is imported, so the suite runs in any
 plain Python environment with only `pytest` installed.
 
-104 tests total:
-- `test_model_utils.py` — `offline()`, `load_whisper()` device selection, SDPA flag, offline/online `local_files_only`, return value
+105 tests total:
+- `test_model_utils.py` — `offline()`, `load_whisper()` device selection, SDPA flag, offline/online `local_files_only`, English language forced, return value
 - `test_transcribe.py` — `format_time` (including hours and two-hour cases), `transcribe()`, `pipe=` injection bypasses `load_whisper`
 - `test_diarize.py` — token resolution, annotation parsing, `diarize()`
 - `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall` (safe extraction + path-traversal rejection + nested paths), progress output (spying on `tqdm.write`), `process_zip()`
@@ -243,6 +245,7 @@ Patch targets after `model_utils` refactor:
 - Updated `tests/test_transcribe.py`: removed `_offline`/`TestOffline`, updated `_patch_pipeline` to use `patch("transcribe.load_whisper")`, added `test_injected_pipe_used_directly`, fixed and expanded `format_time` tests (hours, two-hour cases)
 - Updated `tests/test_transcribe_zip.py`: changed `_load_model` patch targets to `load_whisper`; added `TestSafeExtractall` (3 tests)
 - 104 tests total across 5 files; all passing
+- Added `generate_kwargs={"language": "en", "task": "transcribe"}` to `load_whisper()` pipeline call — suppresses multilingual language-detection warnings and forces English transcription in both modes
 
 ### 2026-04-27 (initial)
 - Added `transcribe_zip.py` — full multi-track zip pipeline (no diarization, speaker from filename, chronological merge)
