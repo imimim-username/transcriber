@@ -102,9 +102,8 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 - `model_utils.py` (Whisper): checks `torch.cuda.is_available()` then `torch.backends.mps.is_available()`; dtype is `float16` on CUDA, `float32` on MPS and CPU; SDPA attention enabled on CUDA only
 - `diarize.py`: same check
 
-### `from_pretrained()` parameter note
-- The `dtype=` parameter is used (not `torch_dtype=` — that name is deprecated in newer transformers versions)
-- `torch_dtype=` is still passed to the `pipeline()` call (this is a different parameter on a different object and has not been renamed)
+### `from_pretrained()` and `pipeline()` parameter note
+- `dtype=` is used everywhere (not `torch_dtype=`) — `torch_dtype` is deprecated in newer transformers versions for both `from_pretrained()` and `pipeline()`
 
 ### Offline mode
 - Controlled by `HF_HUB_OFFLINE=1` in `.env`
