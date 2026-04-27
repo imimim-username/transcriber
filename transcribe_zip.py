@@ -155,11 +155,13 @@ def _transcribe_track(
 
     Empty chunks are skipped.
     """
+    tqdm.write("  Running Whisper inference…")
     result = pipe(str(audio_path), return_timestamps=True)
     chunks: list[dict[str, Any]] = result.get("chunks") or []
+    total_chunks = len(chunks)
 
     segments: list[dict[str, Any]] = []
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks, 1):
         text = (chunk.get("text") or "").strip()
         if not text:
             continue
@@ -169,7 +171,7 @@ def _transcribe_track(
         # Whisper occasionally returns None for the end of the last chunk.
         end: float = float(ts[1]) if ts[1] is not None else start
 
-        tqdm.write(f"  {format_time(start)} → {format_time(end)}  {speaker}")
+        tqdm.write(f"  [{i}/{total_chunks}] {format_time(start)} → {format_time(end)}  {speaker}")
         tqdm.write(f"    {text}")
 
         segments.append(
@@ -282,14 +284,15 @@ def process_zip(
         # --- Transcribe each track ---
         all_segments: list[dict[str, Any]] = []
 
+        total_tracks = len(audio_entries)
         with tqdm(
-            total=len(audio_entries),
+            total=total_tracks,
             unit="track",
-            desc="Transcribing",
+            desc="Tracks",
             ncols=80,
         ) as bar:
-            for _num, speaker, audio_path in audio_entries:
-                tqdm.write(f"\n── {speaker} ({audio_path.name}) ──")
+            for idx, (_num, speaker, audio_path) in enumerate(audio_entries, 1):
+                tqdm.write(f"\n── [{idx}/{total_tracks}] {speaker} ({audio_path.name}) ──")
                 segments = _transcribe_track(audio_path, speaker, pipe)
                 all_segments.extend(segments)
                 bar.update(1)
