@@ -125,6 +125,11 @@ def load_whisper(model_id: str) -> Any:
     if device == "cpu":
         from faster_whisper import WhisperModel  # lazy — not needed on GPU
         fw_model_id = _HF_TO_FW.get(model_id, model_id)
+        print(
+            f"No GPU detected — using faster-whisper (CPU, int8) "
+            f"with model '{fw_model_id}' instead of the standard HuggingFace pipeline. "
+            f"VAD filtering is enabled to skip silent regions."
+        )
         model = WhisperModel(
             fw_model_id,
             device="cpu",
