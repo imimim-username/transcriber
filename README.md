@@ -128,8 +128,10 @@ python main.py path/to/audio.mp3
 
 Any format ffmpeg supports works: `.mp3`, `.m4a`, `.wav`, `.flac`, `.ogg`, etc.
 
-On first run, the models are downloaded from HuggingFace (~2 GB total) and
-cached locally. Subsequent runs load from cache and are much faster.
+On first run, the models are downloaded from HuggingFace and cached locally.
+Total download size depends on your hardware: ~1.1 GB on CPU (faster-whisper
+int8 + diarization model), ~2 GB on GPU/MPS (HuggingFace Whisper pipeline +
+diarization model). Subsequent runs load from cache and are much faster.
 
 ### Multi-track zip (per-speaker recording)
 
@@ -328,7 +330,8 @@ with `HF_HUB_OFFLINE=0` (the default) to download it first.
 
 **CUDA out of memory**
 Whisper large-v3-turbo needs ~6 GB VRAM. Switch to a smaller model by editing
-the `model_id` default in `transcribe.py` — e.g. `openai/whisper-base` (~150 MB).
+the `model_id` default in `transcribe.py` and `transcribe_zip.py` — e.g.
+`openai/whisper-base` (~150 MB).
 
 **Still slow on CPU**
 On CPU, `faster-whisper` with int8 quantisation and VAD is used automatically,

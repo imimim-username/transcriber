@@ -140,7 +140,8 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 - `_speaker_from_filename(name)` — regex `r"^\d+-(.+)$"` on stem: `"1-alice.aac"` → `"alice"`
 - Uses `load_whisper(model_id)` from `model_utils` (no local device/dtype logic)
 - Audio file discovery uses `tmp_dir.rglob("*")` — scans recursively, so audio files anywhere in the zip (nested subdirectories included) are found; sorted by leading number
-- `_transcribe_track(audio_path, speaker, pipe)` — calls `pipe(str(audio_path), return_timestamps=True)`, iterates `result["chunks"]`; handles `None` end timestamps with `end = start` fallback
+- `_spinning_inference(pipe, audio_path)` — wraps a `pipe()` call with a background spinner thread that writes rotating `|/-\` characters to **stderr** every 100 ms; cleared on completion; used so the user gets visual feedback during the blocking inference call without interfering with tqdm output
+- `_transcribe_track(audio_path, speaker, pipe)` — calls `_spinning_inference(pipe, audio_path)` (which in turn calls `pipe(str(audio_path), return_timestamps=True)`), iterates `result["chunks"]`; handles `None` end timestamps with `end = start` fallback
 - tqdm progress bar over tracks (`unit="track"`); `tqdm.write()` for per-segment text output
 - `_AUDIO_EXTENSIONS` frozenset: `.mp3 .mp4 .m4a .aac .ogg .flac .wav .wma .opus .webm`
 - Imports `format_time` from `transcribe`
@@ -156,14 +157,15 @@ Priority order: **CUDA → MPS (Apple Silicon) → CPU** — `model_utils.py` an
 **`transcribe_zip.py`** (zip mode) — printed live per track and per chunk:
 ```
 ── [1/2] alice (1-alice.aac) ──
-  Running Whisper inference…
+  Running Whisper inference… | 
   [1/14] 00:00.000 → 00:02.400  alice
     Hello there.
   [2/14] 00:02.500 → 00:05.100  alice
     How's it going?
 ```
 - Outer tqdm bar tracks overall track progress (`desc="Tracks"`)
-- `tqdm.write()` used for all per-segment/per-chunk output to avoid clobbering the bar
+- `tqdm.write()` used for per-segment/per-chunk output (track header, chunk lines) to avoid clobbering the bar
+- The `Running Whisper inference… |` spinner is written to **stderr** (not tqdm.write) by `_spinning_inference`'s background thread; the spinner character rotates through `|/-\` and the line is cleared when inference completes
 - `format_time()` is a public function in `transcribe.py`, imported by both `main.py` and `transcribe_zip.py`
 
 ### Output files
@@ -191,6 +193,7 @@ All packages are pinned with `>=` minimum version constraints:
 
 ```
 accelerate>=0.27.0
+faster-whisper>=1.0.0
 pandas>=2.0.0
 pydub>=0.25.1
 pyannote-audio>=3.1.0
@@ -221,7 +224,7 @@ plain Python environment with only `pytest` installed.
 - `test_transcribe_zip.py` — `parse_info_txt`, speaker extraction, writers, `_transcribe_track`, `_safe_extractall` (safe extraction + path-traversal rejection + nested paths), recursive subdirectory discovery, progress output (spying on `tqdm.write`), `process_zip()`
 - `test_main.py` — `_to_wav`, output writers, `main()` dispatch and cleanup
 
-Progress output tests use `patch.object(transcribe_zip.tqdm, "write")` to spy on `tqdm.write` calls and assert correct format and ordering (e.g. "Running Whisper inference…" printed before `pipe()` is invoked).
+Progress output tests use `patch.object(transcribe_zip.tqdm, "write")` to spy on `tqdm.write` calls and assert correct format and ordering. Spinner tests patch `transcribe_zip._spinning_inference` to verify it is called (and called before any `tqdm.write` output for the track).
 
 Patch targets after `model_utils` refactor:
 - `"transcribe.load_whisper"` — patches `load_whisper` in transcribe's namespace
